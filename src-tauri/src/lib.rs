@@ -2,6 +2,7 @@ mod audio;
 mod config;
 mod download;
 mod models;
+mod stt;
 mod tray;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -23,6 +24,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(download::Downloads::default())
         .manage(audio::AudioState::default())
+        .manage(stt::SttState::default())
         .invoke_handler(tauri::generate_handler![
             config::get_settings,
             config::update_settings,
@@ -33,7 +35,8 @@ pub fn run() {
             download::cancel_model_download,
             audio::list_audio_devices,
             audio::start_capture,
-            audio::stop_capture
+            audio::stop_capture,
+            stt::stop_capture_and_transcribe
         ])
         .setup(|app| {
             tray::create(app.handle())?;
