@@ -1,4 +1,5 @@
 mod config;
+mod download;
 mod models;
 mod tray;
 
@@ -19,12 +20,15 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
+        .manage(download::Downloads::default())
         .invoke_handler(tauri::generate_handler![
             config::get_settings,
             config::update_settings,
             models::list_models,
             models::delete_model,
-            models::get_models_dir
+            models::get_models_dir,
+            download::download_model,
+            download::cancel_model_download
         ])
         .setup(|app| {
             tray::create(app.handle())?;

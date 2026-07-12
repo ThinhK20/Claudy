@@ -400,7 +400,7 @@ mod tests {
         // SHA-1("abc") reference vector
         assert_eq!(
             sha1_hex_of_file(&path).unwrap(),
-            "a9993e364706816aba3e25717850c26c9cd0d1a3"
+            "a9993e364706816aba3e25717850c26c9cd0d89d"
         );
         std::fs::remove_file(&path).ok();
     }
