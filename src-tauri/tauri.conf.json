@@ -12,9 +12,27 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "Claudy",
-        "width": 800,
-        "height": 600
+        "width": 980,
+        "height": 640,
+        "minWidth": 800,
+        "minHeight": 560,
+        "center": true
+      },
+      {
+        "label": "overlay",
+        "title": "Claudy Overlay",
+        "width": 300,
+        "height": 70,
+        "visible": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "decorations": false,
+        "resizable": false,
+        "shadow": false,
+        "focus": false
       }
     ],
     "security": {

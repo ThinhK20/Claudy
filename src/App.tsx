@@ -1,11 +1,9 @@
-import { Button } from "@/components/ui/button";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import MainApp from "@/windows/MainApp";
+import OverlayPage from "@/windows/OverlayPage";
 
 function App() {
-  return (
-    <div className="flex h-screen items-center justify-center">
-      <Button>Claudy</Button>
-    </div>
-  );
+  return getCurrentWindow().label === "overlay" ? <OverlayPage /> : <MainApp />;
 }
 
 export default App;
