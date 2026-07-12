@@ -1,3 +1,4 @@
+mod audio;
 mod config;
 mod download;
 mod models;
@@ -21,6 +22,7 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
         .manage(download::Downloads::default())
+        .manage(audio::AudioState::default())
         .invoke_handler(tauri::generate_handler![
             config::get_settings,
             config::update_settings,
@@ -28,7 +30,10 @@ pub fn run() {
             models::delete_model,
             models::get_models_dir,
             download::download_model,
-            download::cancel_model_download
+            download::cancel_model_download,
+            audio::list_audio_devices,
+            audio::start_capture,
+            audio::stop_capture
         ])
         .setup(|app| {
             tray::create(app.handle())?;
