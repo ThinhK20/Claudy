@@ -1,4 +1,5 @@
 mod config;
+mod models;
 mod tray;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -20,7 +21,10 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             config::get_settings,
-            config::update_settings
+            config::update_settings,
+            models::list_models,
+            models::delete_model,
+            models::get_models_dir
         ])
         .setup(|app| {
             tray::create(app.handle())?;
