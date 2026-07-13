@@ -1,5 +1,6 @@
 mod audio;
 mod config;
+mod dictation;
 mod download;
 mod inject;
 mod models;
@@ -27,6 +28,7 @@ pub fn run() {
         .manage(download::Downloads::default())
         .manage(audio::AudioState::default())
         .manage(stt::SttState::default())
+        .manage(dictation::DictationState::default())
         .invoke_handler(tauri::generate_handler![
             config::get_settings,
             config::update_settings,
@@ -39,7 +41,9 @@ pub fn run() {
             audio::start_capture,
             audio::stop_capture,
             stt::stop_capture_and_transcribe,
-            inject::paste_text
+            inject::paste_text,
+            dictation::toggle_dictation,
+            dictation::get_dictation_state
         ])
         .setup(|app| {
             tray::create(app.handle())?;
