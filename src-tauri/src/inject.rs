@@ -13,6 +13,8 @@ const PASTE_SETTLE_MS: u64 = 200;
 
 /// Insert `text` into the currently focused app via clipboard-paste:
 /// save clipboard (if restoring) -> write text -> Ctrl+V -> restore.
+/// Restore always runs, even if Ctrl+V fails, so `restore_clipboard` is
+/// honored on every path; a paste failure is still returned to the caller.
 /// Blocking (~250 ms of sleeps): always call via spawn_blocking, never on
 /// the event-loop thread.
 pub fn insert_text(app: &AppHandle, text: &str, restore_clipboard: bool) -> Result<(), String> {
@@ -29,14 +31,25 @@ pub fn insert_text(app: &AppHandle, text: &str, restore_clipboard: bool) -> Resu
         .map_err(|e| format!("Clipboard write failed: {e}"))?;
     thread::sleep(Duration::from_millis(CLIPBOARD_SETTLE_MS));
 
-    send_paste()?;
+    let paste_result = send_paste();
 
     if let Some(prev) = previous {
-        thread::sleep(Duration::from_millis(PASTE_SETTLE_MS));
-        app.clipboard()
+        // Only wait for the target app to read the new clipboard if the
+        // paste actually happened — nothing to wait for otherwise.
+        if paste_result.is_ok() {
+            thread::sleep(Duration::from_millis(PASTE_SETTLE_MS));
+        }
+        let restore_result = app
+            .clipboard()
             .write_text(prev)
-            .map_err(|e| format!("Clipboard restore failed: {e}"))?;
+            .map_err(|e| format!("Clipboard restore failed: {e}"));
+        // Paste is the root cause when both fail; surface it first.
+        paste_result?;
+        restore_result?;
+    } else {
+        paste_result?;
     }
+
     Ok(())
 }
 
