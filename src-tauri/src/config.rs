@@ -60,6 +60,14 @@ pub fn get_settings(app: AppHandle) -> Result<Settings, String> {
 
 #[tauri::command]
 pub fn update_settings(app: AppHandle, settings: Settings) -> Result<(), String> {
+    let old = load(&app)?;
+    if old.dictation_shortcut != settings.dictation_shortcut {
+        crate::shortcuts::register_dictation(
+            &app,
+            Some(&old.dictation_shortcut),
+            &settings.dictation_shortcut,
+        )?;
+    }
     save(&app, &settings)
 }
 

@@ -5,6 +5,7 @@ mod download;
 mod inject;
 mod models;
 mod overlay;
+mod shortcuts;
 mod stt;
 mod tray;
 
@@ -48,6 +49,7 @@ pub fn run() {
         .setup(|app| {
             tray::create(app.handle())?;
             overlay::init(app.handle())?;
+            shortcuts::init(app.handle());
             Ok(())
         })
         .on_window_event(|window, event| {
