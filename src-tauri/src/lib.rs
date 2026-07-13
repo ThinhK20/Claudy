@@ -2,6 +2,7 @@ mod audio;
 mod config;
 mod download;
 mod models;
+mod overlay;
 mod stt;
 mod tray;
 
@@ -40,6 +41,7 @@ pub fn run() {
         ])
         .setup(|app| {
             tray::create(app.handle())?;
+            overlay::init(app.handle())?;
             Ok(())
         })
         .on_window_event(|window, event| {
