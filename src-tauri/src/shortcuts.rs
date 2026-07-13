@@ -25,19 +25,28 @@ fn on_dictation_shortcut(app: &AppHandle, shortcut: Shortcut) -> Result<(), Stri
 }
 
 /// Live (re-)registration: unregister `old` (if any), register `new`.
-/// If `new` fails (another app owns the combo), the old binding is restored
-/// so dictation keeps working, and the error is returned to the caller.
+/// If `new` fails (another app owns the combo), restoring the old binding is
+/// attempted so dictation keeps working; a failed restore is reported in the
+/// returned error rather than silently leaving no shortcut bound.
 pub fn register_dictation(app: &AppHandle, old: Option<&str>, new: &str) -> Result<(), String> {
     let shortcut = parse(new)?;
     if let Some(old_accel) = old {
         if let Ok(old_shortcut) = parse(old_accel) {
-            let _ = app.global_shortcut().unregister(old_shortcut);
+            if let Err(e) = app.global_shortcut().unregister(old_shortcut) {
+                return Err(format!(
+                    "Could not release current shortcut \"{old_accel}\": {e}"
+                ));
+            }
         }
     }
     if let Err(e) = on_dictation_shortcut(app, shortcut) {
         if let Some(old_accel) = old {
             if let Ok(old_shortcut) = parse(old_accel) {
-                let _ = on_dictation_shortcut(app, old_shortcut);
+                if let Err(restore_err) = on_dictation_shortcut(app, old_shortcut) {
+                    return Err(format!(
+                        "Could not register \"{new}\": {e}; restoring \"{old_accel}\" also failed — dictation shortcut is currently unbound: {restore_err}"
+                    ));
+                }
             }
         }
         return Err(format!("Could not register \"{new}\": {e}"));
