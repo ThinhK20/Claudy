@@ -1,6 +1,7 @@
 mod audio;
 mod config;
 mod download;
+mod inject;
 mod models;
 mod overlay;
 mod stt;
@@ -37,7 +38,8 @@ pub fn run() {
             audio::list_audio_devices,
             audio::start_capture,
             audio::stop_capture,
-            stt::stop_capture_and_transcribe
+            stt::stop_capture_and_transcribe,
+            inject::paste_text
         ])
         .setup(|app| {
             tray::create(app.handle())?;
