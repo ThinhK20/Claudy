@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { AppSidebar, type PageKey } from "@/components/app-sidebar";
 import { ThemeProvider } from "@/components/theme-provider";
 import { useSettings } from "@/lib/settings-store";
+import { onNavigate } from "@/lib/dictation-api";
 import PromptsPage from "@/pages/PromptsPage";
 import TranscriptionPage from "@/pages/TranscriptionPage";
 import ProvidersPage from "@/pages/ProvidersPage";
@@ -21,6 +22,15 @@ export default function MainApp() {
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    const unlisten = onNavigate((page) => {
+      if (page in PAGES) setPage(page as PageKey);
+    });
+    return () => {
+      unlisten.then((f) => f());
+    };
+  }, []);
 
   const Page = PAGES[page];
   return (
