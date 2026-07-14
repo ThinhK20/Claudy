@@ -218,9 +218,10 @@ struct DictationEvent {
     message: Option<String>,
 }
 
-/// Single choke point for state fan-out. Task 5 adds the tray-icon call here.
+/// Single choke point for state fan-out: webview event + tray icon.
 fn publish(app: &AppHandle, phase: &'static str, message: Option<String>) {
     let _ = app.emit("dictation-state", DictationEvent { phase, message });
+    tray::set_recording(app, phase == "recording");
 }
 
 fn notify(app: &AppHandle, enabled: bool, body: &str) {
