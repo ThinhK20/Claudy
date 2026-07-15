@@ -1,3 +1,4 @@
+mod ai;
 mod audio;
 mod config;
 mod dictation;
