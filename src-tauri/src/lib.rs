@@ -7,8 +7,10 @@ mod inject;
 mod models;
 mod notify;
 mod overlay;
+mod prompt_flow;
 mod prompts;
 mod secrets;
+mod selection;
 mod shortcuts;
 mod stt;
 mod tray;
@@ -34,6 +36,7 @@ pub fn run() {
         .manage(audio::AudioState::default())
         .manage(stt::SttState::default())
         .manage(dictation::DictationState::default())
+        .manage(prompt_flow::PromptFlowState::default())
         .invoke_handler(tauri::generate_handler![
             config::get_settings,
             config::update_settings,
@@ -44,6 +47,7 @@ pub fn run() {
             prompts::list_prompts,
             prompts::save_prompt,
             prompts::delete_prompt,
+            prompt_flow::run_prompt,
             models::list_models,
             models::delete_model,
             models::get_models_dir,
