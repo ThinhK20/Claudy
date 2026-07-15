@@ -4,6 +4,51 @@ use tauri_plugin_store::StoreExt;
 
 pub const STORE_FILE: &str = "settings.json";
 
+/// Single source of truth for provider ids — `secrets` and `ai` validate
+/// against this list.
+pub const PROVIDER_IDS: [&str; 4] = ["openai_compatible", "ollama", "anthropic", "gemini"];
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ProviderSettings {
+    pub base_url: String, // "" = provider's built-in default
+    pub model: String,    // "" = provider's built-in default
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AiSettings {
+    pub active_provider: String, // one of PROVIDER_IDS
+    pub openai_compatible: ProviderSettings,
+    pub ollama: ProviderSettings,
+    pub anthropic: ProviderSettings,
+    pub gemini: ProviderSettings,
+}
+
+impl Default for AiSettings {
+    fn default() -> Self {
+        Self {
+            active_provider: "openai_compatible".into(),
+            openai_compatible: ProviderSettings::default(),
+            ollama: ProviderSettings::default(),
+            anthropic: ProviderSettings::default(),
+            gemini: ProviderSettings::default(),
+        }
+    }
+}
+
+impl AiSettings {
+    pub fn provider(&self, id: &str) -> Result<&ProviderSettings, String> {
+        match id {
+            "openai_compatible" => Ok(&self.openai_compatible),
+            "ollama" => Ok(&self.ollama),
+            "anthropic" => Ok(&self.anthropic),
+            "gemini" => Ok(&self.gemini),
+            _ => Err(format!("Unknown AI provider \"{id}\"")),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Settings {
@@ -18,6 +63,7 @@ pub struct Settings {
     pub notifications_enabled: bool,
     pub start_minimized: bool,
     pub models_dir_override: String, // "" = default project models/ dir
+    pub ai: AiSettings,
 }
 
 impl Default for Settings {
@@ -34,6 +80,7 @@ impl Default for Settings {
             notifications_enabled: true,
             start_minimized: false,
             models_dir_override: String::new(),
+            ai: AiSettings::default(),
         }
     }
 }
@@ -98,5 +145,37 @@ mod tests {
         let v = serde_json::to_value(Settings::default()).unwrap();
         assert!(v.get("dictationShortcut").is_some());
         assert!(v.get("dictation_shortcut").is_none());
+    }
+
+    #[test]
+    fn ai_defaults_to_openai_compatible_with_empty_endpoints() {
+        let s = Settings::default();
+        assert_eq!(s.ai.active_provider, "openai_compatible");
+        assert_eq!(s.ai.ollama, ProviderSettings::default());
+        assert!(s.ai.openai_compatible.base_url.is_empty());
+    }
+
+    #[test]
+    fn ai_settings_round_trip_camel_case_and_fill_missing_with_defaults() {
+        let json = serde_json::json!({
+            "ai": { "activeProvider": "ollama", "ollama": { "baseUrl": "http://box:11434" } }
+        });
+        let s: Settings = serde_json::from_value(json).unwrap();
+        assert_eq!(s.ai.active_provider, "ollama");
+        assert_eq!(s.ai.ollama.base_url, "http://box:11434");
+        assert_eq!(s.ai.ollama.model, ""); // missing nested field -> default
+        assert_eq!(s.ai.anthropic, ProviderSettings::default());
+        let v = serde_json::to_value(&s).unwrap();
+        assert!(v["ai"]["openaiCompatible"].get("baseUrl").is_some());
+    }
+
+    #[test]
+    fn provider_lookup_by_id_covers_all_four_and_rejects_unknown() {
+        let s = Settings::default();
+        for id in PROVIDER_IDS {
+            assert!(s.ai.provider(id).is_ok(), "missing provider field for {id}");
+        }
+        let err = s.ai.provider("skynet").unwrap_err();
+        assert!(err.contains("skynet"), "got: {err}");
     }
 }

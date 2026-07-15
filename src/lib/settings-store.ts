@@ -1,6 +1,21 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 
+export type ProviderId = "openai_compatible" | "ollama" | "anthropic" | "gemini";
+
+export interface ProviderSettings {
+  baseUrl: string;
+  model: string;
+}
+
+export interface AiSettings {
+  activeProvider: ProviderId;
+  openaiCompatible: ProviderSettings;
+  ollama: ProviderSettings;
+  anthropic: ProviderSettings;
+  gemini: ProviderSettings;
+}
+
 export interface Settings {
   theme: "light" | "dark" | "system";
   language: string;
@@ -13,6 +28,7 @@ export interface Settings {
   notificationsEnabled: boolean;
   startMinimized: boolean;
   modelsDirOverride: string;
+  ai: AiSettings;
 }
 
 interface SettingsState {
