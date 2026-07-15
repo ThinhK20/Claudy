@@ -5,6 +5,7 @@ mod download;
 mod inject;
 mod models;
 mod overlay;
+mod secrets;
 mod shortcuts;
 mod stt;
 mod tray;
@@ -33,6 +34,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             config::get_settings,
             config::update_settings,
+            secrets::set_api_key,
+            secrets::has_api_key,
+            secrets::delete_api_key,
             models::list_models,
             models::delete_model,
             models::get_models_dir,
