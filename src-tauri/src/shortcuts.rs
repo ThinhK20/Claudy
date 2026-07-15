@@ -59,13 +59,8 @@ pub fn register_dictation(app: &AppHandle, old: Option<&str>, new: &str) -> Resu
 pub fn init(app: &AppHandle) {
     let settings = crate::config::load(app).unwrap_or_default();
     if let Err(e) = register_dictation(app, None, &settings.dictation_shortcut) {
-        use tauri_plugin_notification::NotificationExt;
-        let _ = app
-            .notification()
-            .builder()
-            .title("Claudy")
-            .body(format!("Dictation shortcut unavailable: {e}"))
-            .show();
+        // Settings may be unreadable at this point: always show.
+        crate::notify::send(app, true, &format!("Dictation shortcut unavailable: {e}"));
     }
 }
 

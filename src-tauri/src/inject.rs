@@ -31,7 +31,7 @@ pub fn insert_text(app: &AppHandle, text: &str, restore_clipboard: bool) -> Resu
         .map_err(|e| format!("Clipboard write failed: {e}"))?;
     thread::sleep(Duration::from_millis(CLIPBOARD_SETTLE_MS));
 
-    let paste_result = send_paste();
+    let paste_result = send_ctrl_key('v');
 
     if let Some(prev) = previous {
         // Only wait for the target app to read the new clipboard if the
@@ -53,18 +53,20 @@ pub fn insert_text(app: &AppHandle, text: &str, restore_clipboard: bool) -> Resu
     Ok(())
 }
 
-fn send_paste() -> Result<(), String> {
+/// Send Ctrl+<c> via input simulation — 'v' pastes (dictation/auto-paste),
+/// 'c' copies (selection probe).
+pub(crate) fn send_ctrl_key(c: char) -> Result<(), String> {
     // Constructed per call: cheap on Windows, and enigo's default
     // release_keys_when_dropped(true) cleans up stuck keys on error.
     let mut enigo = Enigo::new(&EnigoSettings::default())
         .map_err(|e| format!("Input simulation unavailable: {e}"))?;
     enigo
         .key(Key::Control, Direction::Press)
-        .map_err(|e| format!("Paste keystroke failed: {e}"))?;
-    let click = enigo.key(Key::Unicode('v'), Direction::Click);
-    // Always attempt the release, even if the 'v' click failed.
+        .map_err(|e| format!("Ctrl+{c} keystroke failed: {e}"))?;
+    let click = enigo.key(Key::Unicode(c), Direction::Click);
+    // Always attempt the release, even if the click failed.
     let release = enigo.key(Key::Control, Direction::Release);
-    click.map_err(|e| format!("Paste keystroke failed: {e}"))?;
+    click.map_err(|e| format!("Ctrl+{c} keystroke failed: {e}"))?;
     release.map_err(|e| format!("Could not release Ctrl: {e}"))
 }
 

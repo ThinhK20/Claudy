@@ -5,6 +5,7 @@ mod dictation;
 mod download;
 mod inject;
 mod models;
+mod notify;
 mod overlay;
 mod prompts;
 mod secrets;

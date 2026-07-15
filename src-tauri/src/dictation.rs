@@ -1,7 +1,6 @@
 use serde::Serialize;
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager, State};
-use tauri_plugin_notification::NotificationExt;
 
 use crate::{audio, config, inject, overlay, stt, tray};
 
@@ -85,7 +84,7 @@ async fn start_flow(app: AppHandle) {
         Ok(s) => s,
         Err(e) => {
             reset_idle(&app, &dict);
-            notify(&app, true, &format!("Could not load settings: {e}"));
+            crate::notify::send(&app, true, &format!("Could not load settings: {e}"));
             return;
         }
     };
@@ -94,7 +93,7 @@ async fn start_flow(app: AppHandle) {
     // user to the download page (spec: model-missing notification deep-link).
     if let Err(e) = stt::resolve_model_path(&settings) {
         reset_idle(&app, &dict);
-        notify(&app, settings.notifications_enabled, &e);
+        crate::notify::send(&app, settings.notifications_enabled, &e);
         tray::show_main(&app);
         let _ = app.emit_to("main", "navigate", "transcription");
         return;
@@ -103,7 +102,7 @@ async fn start_flow(app: AppHandle) {
     // The single capture slot is busy (mic test running in the main window).
     if app.state::<audio::AudioState>().0.lock().unwrap().is_some() {
         reset_idle(&app, &dict);
-        notify(
+        crate::notify::send(
             &app,
             settings.notifications_enabled,
             "Microphone is already in use — stop the mic test first",
@@ -125,7 +124,7 @@ async fn start_flow(app: AppHandle) {
         }
         Err(e) => {
             reset_idle(&app, &dict);
-            notify(
+            crate::notify::send(
                 &app,
                 settings.notifications_enabled,
                 &format!("Could not start recording: {e}"),
@@ -185,7 +184,7 @@ async fn stop_flow(app: AppHandle) {
 
             reset_idle(&app, &dict);
             if let Err(e) = injected {
-                notify(
+                crate::notify::send(
                     &app,
                     settings.notifications_enabled,
                     &format!("Could not insert text: {e}"),
@@ -222,18 +221,6 @@ struct DictationEvent {
 fn publish(app: &AppHandle, phase: &'static str, message: Option<String>) {
     let _ = app.emit("dictation-state", DictationEvent { phase, message });
     tray::set_recording(app, phase == "recording");
-}
-
-fn notify(app: &AppHandle, enabled: bool, body: &str) {
-    if !enabled {
-        return;
-    }
-    let _ = app
-        .notification()
-        .builder()
-        .title("Claudy")
-        .body(body)
-        .show();
 }
 
 #[tauri::command]
