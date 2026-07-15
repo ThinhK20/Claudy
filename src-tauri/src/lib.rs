@@ -38,6 +38,7 @@ pub fn run() {
             secrets::set_api_key,
             secrets::has_api_key,
             secrets::delete_api_key,
+            ai::test_provider,
             models::list_models,
             models::delete_model,
             models::get_models_dir,

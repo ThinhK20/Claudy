@@ -6,6 +6,7 @@ pub const REQUEST_TIMEOUT_SECS: u64 = 60;
 
 /// A fully built provider HTTP call — pure data, so request construction
 /// is unit-testable without any network (spec testing requirement).
+#[derive(Debug)]
 pub struct HttpRequest {
     pub url: String,
     pub headers: Vec<(&'static str, String)>,
@@ -26,12 +27,17 @@ pub trait AiProvider: Sync {
     fn parse_response(&self, body: &str) -> Result<String, String>;
 }
 
+pub mod anthropic;
+pub mod gemini;
+pub mod ollama;
 pub mod openai_compatible;
 
 pub fn provider(id: &str) -> Result<&'static dyn AiProvider, String> {
     match id {
         "openai_compatible" => Ok(&openai_compatible::OpenAiCompatible),
-        // Task 4 adds: "ollama", "anthropic", "gemini"
+        "ollama" => Ok(&ollama::Ollama),
+        "anthropic" => Ok(&anthropic::Anthropic),
+        "gemini" => Ok(&gemini::Gemini),
         _ => Err(format!("Unknown AI provider \"{id}\"")),
     }
 }
@@ -110,6 +116,13 @@ pub async fn complete(app: &AppHandle, prompt: &str) -> Result<String, String> {
     complete_with(app, &id, prompt).await
 }
 
+/// Connection test for the Providers page: cheapest possible round trip
+/// that proves endpoint + key + model all work.
+#[tauri::command]
+pub async fn test_provider(app: AppHandle, provider_id: String) -> Result<String, String> {
+    complete_with(&app, &provider_id, "Reply with exactly: OK").await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -128,6 +141,13 @@ mod tests {
     fn registry_resolves_known_ids_and_rejects_unknown() {
         assert_eq!(provider("openai_compatible").unwrap().id(), "openai_compatible");
         assert!(provider("skynet").is_err());
+    }
+
+    #[test]
+    fn every_config_provider_id_resolves_in_the_registry() {
+        for id in crate::config::PROVIDER_IDS {
+            assert_eq!(provider(id).unwrap().id(), id, "registry mismatch for {id}");
+        }
     }
 
     #[tokio::test]
