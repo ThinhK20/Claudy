@@ -37,6 +37,7 @@ pub fn run() {
         .manage(stt::SttState::default())
         .manage(dictation::DictationState::default())
         .manage(prompt_flow::PromptFlowState::default())
+        .manage(shortcuts::PromptShortcuts::default())
         .invoke_handler(tauri::generate_handler![
             config::get_settings,
             config::update_settings,

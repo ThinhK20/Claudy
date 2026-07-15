@@ -114,6 +114,9 @@ pub fn update_settings(app: AppHandle, settings: Settings) -> Result<(), String>
             Some(&old.dictation_shortcut),
             &settings.dictation_shortcut,
         )?;
+        save(&app, &settings)?;
+        crate::shortcuts::notify_sync_warnings(&app, &crate::shortcuts::sync_prompts(&app)?);
+        return Ok(());
     }
     save(&app, &settings)
 }

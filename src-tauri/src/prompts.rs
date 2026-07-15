@@ -128,13 +128,16 @@ pub fn save_prompt(app: AppHandle, mut prompt: Prompt) -> Result<Prompt, String>
     }
     let list = upsert(load(&app)?, prompt.clone());
     save_list(&app, &list)?;
+    crate::shortcuts::notify_sync_warnings(&app, &crate::shortcuts::sync_prompts(&app)?);
     Ok(prompt)
 }
 
 #[tauri::command]
 pub fn delete_prompt(app: AppHandle, id: String) -> Result<(), String> {
     let list = remove(load(&app)?, &id);
-    save_list(&app, &list)
+    save_list(&app, &list)?;
+    crate::shortcuts::notify_sync_warnings(&app, &crate::shortcuts::sync_prompts(&app)?);
+    Ok(())
 }
 
 #[cfg(test)]
