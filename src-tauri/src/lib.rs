@@ -6,6 +6,7 @@ mod download;
 mod inject;
 mod models;
 mod overlay;
+mod prompts;
 mod secrets;
 mod shortcuts;
 mod stt;
@@ -39,6 +40,9 @@ pub fn run() {
             secrets::has_api_key,
             secrets::delete_api_key,
             ai::test_provider,
+            prompts::list_prompts,
+            prompts::save_prompt,
+            prompts::delete_prompt,
             models::list_models,
             models::delete_model,
             models::get_models_dir,
