@@ -65,7 +65,8 @@ export function PromptEditor({ initial, onClose, onSaved }: PromptEditorProps) {
         if (!open) onClose();
       }}
     >
-      <DialogContent className="sm:max-w-lg">
+      {/* Fixed 60vw x 80vh editor; the template row absorbs the spare height. */}
+      <DialogContent className="h-[80vh] grid-rows-[auto_minmax(0,1fr)_auto] sm:max-w-[60vw]">
         <DialogHeader>
           <DialogTitle>{initial?.id ? "Edit prompt" : "New prompt"}</DialogTitle>
           <DialogDescription>
@@ -74,7 +75,7 @@ export function PromptEditor({ initial, onClose, onSaved }: PromptEditorProps) {
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex flex-col gap-4">
+        <div className="flex min-h-0 flex-col gap-4">
           <div className="flex flex-col gap-2">
             <Label htmlFor="prompt-name">Name</Label>
             <Input
@@ -84,12 +85,12 @@ export function PromptEditor({ initial, onClose, onSaved }: PromptEditorProps) {
               placeholder="Fix grammar & spelling"
             />
           </div>
-          <div className="flex flex-col gap-2">
+          <div className="flex min-h-0 flex-1 flex-col gap-2">
             <Label htmlFor="prompt-template">Template</Label>
             <Textarea
               id="prompt-template"
               rows={6}
-              className="max-h-60"
+              className="min-h-0 flex-1"
               value={draft.template}
               onChange={(e) => setDraft({ ...draft, template: e.target.value })}
               placeholder={"Correct the grammar of the following text:\n\n{{selected_text}}"}
