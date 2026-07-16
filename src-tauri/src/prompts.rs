@@ -73,6 +73,57 @@ pub fn remove(list: Vec<Prompt>, id: &str) -> Vec<Prompt> {
     list.into_iter().filter(|p| p.id != id).collect()
 }
 
+#[derive(Debug, Default, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportReport {
+    pub added: usize,
+    pub updated: usize,
+    /// Entries dropped entirely, with a per-entry reason.
+    pub skipped: Vec<String>,
+    /// Entries imported after an adjustment (e.g. invalid shortcut cleared).
+    pub warnings: Vec<String>,
+}
+
+/// Pure import semantics: upsert by id so re-importing your own export is
+/// idempotent. Empty id = new prompt (uuid assigned). Invalid entries are
+/// reported, never silently dropped or silently "fixed".
+pub fn merge_imported(existing: Vec<Prompt>, imported: Vec<Prompt>) -> (Vec<Prompt>, ImportReport) {
+    let mut list = existing;
+    let mut report = ImportReport::default();
+    for (i, mut prompt) in imported.into_iter().enumerate() {
+        let label = if prompt.name.trim().is_empty() {
+            format!("entry {}", i + 1)
+        } else {
+            format!("\"{}\"", prompt.name)
+        };
+        if prompt.name.trim().is_empty() {
+            report.skipped.push(format!("{label}: name is empty"));
+            continue;
+        }
+        if prompt.template.trim().is_empty() {
+            report.skipped.push(format!("{label}: template is empty"));
+            continue;
+        }
+        if !prompt.shortcut.trim().is_empty() {
+            if let Err(e) = crate::shortcuts::parse(&prompt.shortcut) {
+                report.warnings.push(format!("{label}: shortcut cleared — {e}"));
+                prompt.shortcut = String::new();
+            }
+        }
+        if prompt.id.trim().is_empty() {
+            prompt.id = uuid::Uuid::new_v4().to_string();
+        }
+        let is_update = list.iter().any(|existing| existing.id == prompt.id);
+        list = upsert(list, prompt);
+        if is_update {
+            report.updated += 1;
+        } else {
+            report.added += 1;
+        }
+    }
+    (list, report)
+}
+
 #[derive(Debug, Default)]
 pub struct TemplateVars {
     pub selected_text: String,
@@ -140,12 +191,88 @@ pub fn delete_prompt(app: AppHandle, id: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Write all prompts to `path` as a pretty-printed JSON array (the same
+/// shape `import_prompts` reads). Returns the exported count.
+#[tauri::command]
+pub fn export_prompts(app: AppHandle, path: String) -> Result<usize, String> {
+    let list = load(&app)?;
+    let json = serde_json::to_string_pretty(&list).map_err(|e| e.to_string())?;
+    std::fs::write(&path, json).map_err(|e| format!("Could not write {path}: {e}"))?;
+    Ok(list.len())
+}
+
+#[tauri::command]
+pub fn import_prompts(app: AppHandle, path: String) -> Result<ImportReport, String> {
+    let raw = std::fs::read_to_string(&path).map_err(|e| format!("Could not read {path}: {e}"))?;
+    let imported: Vec<Prompt> =
+        serde_json::from_str(&raw).map_err(|e| format!("Not a valid prompts export: {e}"))?;
+    let (list, report) = merge_imported(load(&app)?, imported);
+    save_list(&app, &list)?;
+    // Imported shortcuts must take effect (or warn) immediately, like save_prompt.
+    crate::shortcuts::notify_sync_warnings(&app, &crate::shortcuts::sync_prompts(&app)?);
+    Ok(report)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn p(id: &str, name: &str) -> Prompt {
         Prompt { id: id.into(), name: name.into(), ..Prompt::default() }
+    }
+
+    fn importable(id: &str, name: &str) -> Prompt {
+        Prompt { id: id.into(), name: name.into(), template: "T".into(), ..Prompt::default() }
+    }
+
+    #[test]
+    fn merge_upserts_by_id_and_counts_added_vs_updated() {
+        let existing = vec![p("a", "A"), p("b", "B")];
+        let (list, report) =
+            merge_imported(existing, vec![importable("a", "A2"), importable("c", "C")]);
+        assert_eq!(list.len(), 3);
+        assert_eq!(list[0].name, "A2"); // updated in place
+        assert_eq!(list[2].id, "c"); // appended
+        assert_eq!((report.added, report.updated), (1, 1));
+        assert!(report.skipped.is_empty() && report.warnings.is_empty(), "got: {report:?}");
+    }
+
+    #[test]
+    fn merge_assigns_uuids_to_imported_prompts_without_ids() {
+        let (list, report) = merge_imported(vec![], vec![importable("", "N")]);
+        assert_eq!(report.added, 1);
+        assert!(!list[0].id.is_empty());
+    }
+
+    #[test]
+    fn merge_skips_entries_missing_name_or_template_with_reasons() {
+        let imported = vec![
+            importable("x", "  "),                                     // no name
+            Prompt { name: "NoTemplate".into(), ..Prompt::default() }, // no template
+        ];
+        let (list, report) = merge_imported(vec![], imported);
+        assert!(list.is_empty());
+        assert_eq!(report.skipped.len(), 2);
+        assert!(report.skipped[1].contains("NoTemplate"), "got: {:?}", report.skipped);
+    }
+
+    #[test]
+    fn merge_clears_invalid_shortcuts_but_keeps_the_prompt() {
+        let mut bad = importable("x", "Bad");
+        bad.shortcut = "NotAKey+Q".into();
+        let (list, report) = merge_imported(vec![], vec![bad]);
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].shortcut, "");
+        assert_eq!(report.warnings.len(), 1);
+        assert!(report.warnings[0].contains("Bad"), "got: {:?}", report.warnings);
+    }
+
+    #[test]
+    fn import_report_serializes_camel_case_with_all_fields() {
+        let v = serde_json::to_value(ImportReport::default()).unwrap();
+        for field in ["added", "updated", "skipped", "warnings"] {
+            assert!(v.get(field).is_some(), "missing field {field}");
+        }
     }
 
     #[test]

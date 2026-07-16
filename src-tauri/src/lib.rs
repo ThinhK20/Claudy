@@ -48,6 +48,8 @@ pub fn run() {
             prompts::list_prompts,
             prompts::save_prompt,
             prompts::delete_prompt,
+            prompts::export_prompts,
+            prompts::import_prompts,
             prompt_flow::run_prompt,
             models::list_models,
             models::delete_model,
