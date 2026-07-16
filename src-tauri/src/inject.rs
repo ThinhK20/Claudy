@@ -53,6 +53,14 @@ pub fn insert_text(app: &AppHandle, text: &str, restore_clipboard: bool) -> Resu
     Ok(())
 }
 
+/// Modifiers the user may still be physically holding from the global
+/// shortcut that triggered us (e.g. the Shift of Ctrl+Shift+G). Left held,
+/// they contaminate the synthetic chord: Ctrl+C becomes Ctrl+Shift+C
+/// (Chrome: DevTools inspect), Ctrl+V becomes Ctrl+Alt+V (Word/Excel:
+/// Paste Special) or Win+Ctrl+V. Ctrl itself is exempt — it is part of
+/// the intended chord.
+const STRAY_MODIFIERS: [Key; 3] = [Key::Shift, Key::Alt, Key::Meta];
+
 /// Send Ctrl+<c> via input simulation — 'v' pastes (dictation/auto-paste),
 /// 'c' copies (selection probe).
 pub(crate) fn send_ctrl_key(c: char) -> Result<(), String> {
@@ -60,6 +68,11 @@ pub(crate) fn send_ctrl_key(c: char) -> Result<(), String> {
     // release_keys_when_dropped(true) cleans up stuck keys on error.
     let mut enigo = Enigo::new(&EnigoSettings::default())
         .map_err(|e| format!("Input simulation unavailable: {e}"))?;
+    // Best-effort: releasing an already-up key is a no-op, and a failure
+    // here would co-occur with a chord failure, which IS surfaced below.
+    for modifier in STRAY_MODIFIERS {
+        let _ = enigo.key(modifier, Direction::Release);
+    }
     enigo
         .key(Key::Control, Direction::Press)
         .map_err(|e| format!("Ctrl+{c} keystroke failed: {e}"))?;
