@@ -45,7 +45,11 @@ export default function SettingsPage() {
       await update(patch);
     } catch (e: unknown) {
       setError(String(e));
-      await load();
+      try {
+        await load();
+      } catch (reloadError: unknown) {
+        setError(`${String(e)} (could not refresh settings: ${String(reloadError)})`);
+      }
     }
   };
 
