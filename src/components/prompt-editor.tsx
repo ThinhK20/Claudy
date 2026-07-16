@@ -89,6 +89,7 @@ export function PromptEditor({ initial, onClose, onSaved }: PromptEditorProps) {
             <Textarea
               id="prompt-template"
               rows={6}
+              className="max-h-60"
               value={draft.template}
               onChange={(e) => setDraft({ ...draft, template: e.target.value })}
               placeholder={"Correct the grammar of the following text:\n\n{{selected_text}}"}
