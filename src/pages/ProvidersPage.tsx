@@ -10,13 +10,7 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { hasApiKey, setApiKey, testProvider } from "@/lib/ai-api";
 import {
   useSettings,
@@ -76,13 +70,16 @@ interface TestState {
 export default function ProvidersPage() {
   const settings = useSettings((s) => s.settings);
   const update = useSettings((s) => s.update);
+  // null = "show the active provider's tab" (until the user picks one).
+  const [selected, setSelected] = useState<ProviderId | null>(null);
   const [isKeyStored, setIsKeyStored] = useState(false);
   const [keyDraft, setKeyDraft] = useState("");
   const [keyError, setKeyError] = useState<string | null>(null);
   const [test, setTest] = useState<TestState>({ status: "idle", message: "" });
 
   const activeId = settings?.ai.activeProvider ?? "openai_compatible";
-  const meta = PROVIDERS.find((p) => p.id === activeId) ?? PROVIDERS[0];
+  const selectedId = selected ?? activeId;
+  const meta = PROVIDERS.find((p) => p.id === selectedId) ?? PROVIDERS[0];
 
   useEffect(() => {
     setKeyDraft("");
@@ -95,9 +92,13 @@ export default function ProvidersPage() {
 
   if (!settings) return null;
   const cfg = settings.ai[meta.settingsKey];
+  const isActive = meta.id === activeId;
 
   const patchProvider = (patch: Partial<{ baseUrl: string; model: string }>) =>
     update({ ai: { ...settings.ai, [meta.settingsKey]: { ...cfg, ...patch } } });
+
+  const setActive = () =>
+    update({ ai: { ...settings.ai, activeProvider: meta.id } });
 
   const saveKey = async () => {
     setKeyError(null);
@@ -125,36 +126,41 @@ export default function ProvidersPage() {
       <div>
         <h1 className="text-2xl font-semibold">Providers</h1>
         <p className="text-muted-foreground mt-1">
-          AI provider for prompt shortcuts.
+          AI provider for prompt shortcuts. Configure any provider; only the active one
+          is used.
         </p>
       </div>
 
+      <Tabs value={meta.id} onValueChange={(v) => setSelected(v as ProviderId)}>
+        <TabsList>
+          {PROVIDERS.map((p) => (
+            <TabsTrigger key={p.id} value={p.id} className="gap-2">
+              {p.label}
+              {p.id === activeId && <Badge variant="secondary">Active</Badge>}
+            </TabsTrigger>
+          ))}
+        </TabsList>
+      </Tabs>
+
       <Card>
         <CardHeader>
-          <CardTitle>Active provider</CardTitle>
-          <CardDescription>Used by every prompt shortcut</CardDescription>
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <CardTitle>{meta.label}</CardTitle>
+              <CardDescription>
+                Empty fields use the defaults shown as placeholders.
+              </CardDescription>
+            </div>
+            {isActive ? (
+              <Badge>Active provider</Badge>
+            ) : (
+              <Button variant="outline" size="sm" onClick={() => void setActive()}>
+                Set as active
+              </Button>
+            )}
+          </div>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
-          <div className="flex items-center gap-3">
-            <Label className="w-28 shrink-0">Provider</Label>
-            <Select
-              value={activeId}
-              onValueChange={(v) =>
-                update({ ai: { ...settings.ai, activeProvider: v as ProviderId } })
-              }
-            >
-              <SelectTrigger className="flex-1">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {PROVIDERS.map((p) => (
-                  <SelectItem key={p.id} value={p.id}>
-                    {p.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
           {/* key remounts on provider switch so defaultValue re-seeds; commit
               on blur — per-keystroke updates would write settings.json each key */}
           <div className="flex items-center gap-3">
@@ -196,7 +202,7 @@ export default function ProvidersPage() {
             <Button
               variant="outline"
               size="sm"
-              onClick={saveKey}
+              onClick={() => void saveKey()}
               disabled={!keyDraft && !isKeyStored}
             >
               {keyDraft || !isKeyStored ? "Save key" : "Remove key"}
@@ -211,12 +217,12 @@ export default function ProvidersPage() {
         <CardHeader>
           <CardTitle>Connection test</CardTitle>
           <CardDescription>
-            Sends a one-word prompt through the full pipeline
+            Sends a one-word prompt through the full pipeline for {meta.label}
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
           <div>
-            <Button onClick={runTest} disabled={test.status === "running"}>
+            <Button onClick={() => void runTest()} disabled={test.status === "running"}>
               {test.status === "running" ? "Testing…" : "Test connection"}
             </Button>
           </div>
