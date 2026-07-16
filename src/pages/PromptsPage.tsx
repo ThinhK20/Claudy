@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { Play, Trash2 } from "lucide-react";
+import { Copy, Pencil, Play, Plus, Trash2 } from "lucide-react";
+import { EMPTY_PROMPT, PromptEditor } from "@/components/prompt-editor";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -28,6 +29,7 @@ export default function PromptsPage() {
   const [search, setSearch] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [toDelete, setToDelete] = useState<Prompt | null>(null);
+  const [editing, setEditing] = useState<Prompt | null>(null);
 
   const reload = useCallback(async () => {
     try {
@@ -62,6 +64,11 @@ export default function PromptsPage() {
   const toggleEnabled = (p: Prompt) =>
     mutate(() => savePrompt({ ...p, enabled: !p.enabled }));
 
+  // Draft, not save: the copy opens in the editor. Its shortcut is cleared —
+  // it would instantly conflict with its source.
+  const duplicate = (p: Prompt) =>
+    setEditing({ ...p, id: "", name: `${p.name} (copy)`, shortcut: "" });
+
   const confirmDelete = () => {
     if (toDelete) void mutate(() => deletePrompt(toDelete.id));
     setToDelete(null);
@@ -83,6 +90,10 @@ export default function PromptsPage() {
           onChange={(e) => setSearch(e.target.value)}
           className="max-w-sm"
         />
+        <Button onClick={() => setEditing(EMPTY_PROMPT)}>
+          <Plus className="h-4 w-4" />
+          New prompt
+        </Button>
       </div>
 
       {error && <p className="text-destructive text-sm">{error}</p>}
@@ -128,6 +139,22 @@ export default function PromptsPage() {
                 <Button
                   variant="ghost"
                   size="icon"
+                  title="Edit"
+                  onClick={() => setEditing(p)}
+                >
+                  <Pencil className="h-4 w-4" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  title="Duplicate"
+                  onClick={() => duplicate(p)}
+                >
+                  <Copy className="h-4 w-4" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
                   title="Delete"
                   onClick={() => setToDelete(p)}
                 >
@@ -159,6 +186,12 @@ export default function PromptsPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <PromptEditor
+        initial={editing}
+        onClose={() => setEditing(null)}
+        onSaved={() => void reload()}
+      />
     </div>
   );
 }
