@@ -38,3 +38,22 @@ export const deletePrompt = (id: string): Promise<void> =>
   invoke("delete_prompt", { id });
 
 export const runPrompt = (id: string): Promise<void> => invoke("run_prompt", { id });
+
+// --- Import / export (Phase 5) ---
+
+export interface ImportReport {
+  added: number;
+  updated: number;
+  /** Entries dropped entirely, with reasons. */
+  skipped: string[];
+  /** Entries imported after an adjustment (e.g. invalid shortcut cleared). */
+  warnings: string[];
+}
+
+/** Write all prompts to `path` as a JSON array; resolves to the count. */
+export const exportPrompts = (path: string): Promise<number> =>
+  invoke("export_prompts", { path });
+
+/** Merge prompts from a JSON export at `path` (upsert by id). */
+export const importPrompts = (path: string): Promise<ImportReport> =>
+  invoke("import_prompts", { path });

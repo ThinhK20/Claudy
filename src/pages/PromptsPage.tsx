@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { Copy, Pencil, Play, Plus, Trash2 } from "lucide-react";
+import { Copy, Download, Pencil, Play, Plus, Trash2, Upload } from "lucide-react";
+import { open as openFile, save as saveFile } from "@tauri-apps/plugin-dialog";
 import { EMPTY_PROMPT, PromptEditor } from "@/components/prompt-editor";
 import {
   AlertDialog,
@@ -18,6 +19,8 @@ import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import {
   deletePrompt,
+  exportPrompts,
+  importPrompts,
   listPrompts,
   runPrompt,
   savePrompt,
@@ -30,6 +33,7 @@ export default function PromptsPage() {
   const [error, setError] = useState<string | null>(null);
   const [toDelete, setToDelete] = useState<Prompt | null>(null);
   const [editing, setEditing] = useState<Prompt | null>(null);
+  const [report, setReport] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
     try {
@@ -74,6 +78,42 @@ export default function PromptsPage() {
     setToDelete(null);
   };
 
+  const JSON_FILTER = [{ name: "JSON", extensions: ["json"] }];
+
+  const doExport = async () => {
+    setError(null);
+    setReport(null);
+    try {
+      const path = await saveFile({
+        defaultPath: "claudy-prompts.json",
+        filters: JSON_FILTER,
+      });
+      if (!path) return; // user cancelled
+      const count = await exportPrompts(path);
+      setReport(`Exported ${count} prompt${count === 1 ? "" : "s"}.`);
+    } catch (e: unknown) {
+      setError(String(e));
+    }
+  };
+
+  const doImport = async () => {
+    setError(null);
+    setReport(null);
+    try {
+      const path = await openFile({ multiple: false, filters: JSON_FILTER });
+      if (typeof path !== "string") return; // user cancelled
+      const r = await importPrompts(path);
+      await reload();
+      const notes = [...r.warnings, ...r.skipped];
+      setReport(
+        `Imported: ${r.added} added, ${r.updated} updated.` +
+          (notes.length ? ` ${notes.join("; ")}` : ""),
+      );
+    } catch (e: unknown) {
+      setError(String(e));
+    }
+  };
+
   return (
     <div className="flex flex-col gap-6 p-6">
       <div>
@@ -94,9 +134,20 @@ export default function PromptsPage() {
           <Plus className="h-4 w-4" />
           New prompt
         </Button>
+        <div className="ml-auto flex items-center gap-2">
+          <Button variant="outline" onClick={() => void doImport()}>
+            <Upload className="h-4 w-4" />
+            Import
+          </Button>
+          <Button variant="outline" onClick={() => void doExport()}>
+            <Download className="h-4 w-4" />
+            Export
+          </Button>
+        </div>
       </div>
 
       {error && <p className="text-destructive text-sm">{error}</p>}
+      {report && <p className="text-muted-foreground text-sm">{report}</p>}
 
       <Card>
         <CardContent className="p-0">
