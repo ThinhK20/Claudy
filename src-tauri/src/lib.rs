@@ -51,6 +51,7 @@ pub fn run() {
             prompts::export_prompts,
             prompts::import_prompts,
             prompt_flow::run_prompt,
+            shortcuts::check_shortcut,
             models::list_models,
             models::delete_model,
             models::get_models_dir,

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
+use serde::Serialize;
 use tauri::{AppHandle, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
@@ -174,6 +175,62 @@ pub fn notify_sync_warnings(app: &AppHandle, warnings: &[String]) {
     }
 }
 
+/// Pure: does `accel` collide with any taken binding? Comparison happens on
+/// PARSED shortcuts (same rule as `desired_prompt_bindings`), so
+/// "Control+Shift+G" and "Ctrl+Shift+G" count as the same combo. Err =
+/// `accel` itself is invalid; unparseable `taken` entries are skipped.
+pub fn find_conflict(accel: &str, taken: &[(String, String)]) -> Result<Option<String>, String> {
+    let shortcut = parse(accel)?;
+    for (label, taken_accel) in taken {
+        if parse(taken_accel).map(|s| s == shortcut).unwrap_or(false) {
+            return Ok(Some(label.clone()));
+        }
+    }
+    Ok(None)
+}
+
+#[derive(Debug, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ShortcutCheck {
+    pub ok: bool,
+    pub message: String, // "" when ok
+}
+
+/// Live validation for the shortcut editors (spec line 79: conflicts are
+/// surfaced in the UI). `exclude_prompt_id` = the prompt being edited;
+/// `for_dictation` = the dictation combo itself is being edited (then only
+/// prompt shortcuts count as conflicts). A conflict is a WARNING — the
+/// existing sync model skips conflicting bindings with a notification, so
+/// this never blocks a save.
+#[tauri::command]
+pub fn check_shortcut(
+    app: AppHandle,
+    accel: String,
+    exclude_prompt_id: Option<String>,
+    for_dictation: bool,
+) -> Result<ShortcutCheck, String> {
+    let settings = crate::config::load(&app)?;
+    let prompts = crate::prompts::load(&app)?;
+    let mut taken: Vec<(String, String)> = Vec::new();
+    if !for_dictation {
+        taken.push(("the dictation shortcut".into(), settings.dictation_shortcut));
+    }
+    let exclude = exclude_prompt_id.unwrap_or_default();
+    for p in &prompts {
+        if p.enabled && !p.shortcut.trim().is_empty() && p.id != exclude {
+            taken.push((format!("prompt \"{}\"", p.name), p.shortcut.clone()));
+        }
+    }
+    Ok(match find_conflict(&accel, &taken) {
+        Ok(None) => ShortcutCheck { ok: true, message: String::new() },
+        Ok(Some(label)) => ShortcutCheck {
+            ok: false,
+            message: format!("Already used by {label}"),
+        },
+        Err(e) => ShortcutCheck { ok: false, message: e },
+    })
+}
+
 /// Startup registration from settings. A conflict (combo owned by another
 /// app) is NON-FATAL: notify and keep running — the tray toggle still works.
 pub fn init(app: &AppHandle) {
@@ -271,5 +328,29 @@ mod tests {
         assert_eq!(bindings[0].1, "a");
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("Second"), "got: {}", warnings[0]);
+    }
+
+    #[test]
+    fn find_conflict_matches_equivalent_accelerator_strings() {
+        let taken = vec![("prompt \"Fix\"".to_string(), "Control+Shift+G".to_string())];
+        let hit = find_conflict("Ctrl+Shift+G", &taken).unwrap();
+        assert_eq!(hit, Some("prompt \"Fix\"".to_string()));
+    }
+
+    #[test]
+    fn find_conflict_is_none_for_a_free_combo() {
+        let taken = vec![("the dictation shortcut".to_string(), "Ctrl+Shift+D".to_string())];
+        assert_eq!(find_conflict("Ctrl+Shift+G", &taken).unwrap(), None);
+    }
+
+    #[test]
+    fn find_conflict_rejects_invalid_accelerators() {
+        assert!(find_conflict("NotAKey+Q", &[]).is_err());
+    }
+
+    #[test]
+    fn find_conflict_ignores_unparseable_taken_entries() {
+        let taken = vec![("junk".to_string(), "???".to_string())];
+        assert_eq!(find_conflict("Ctrl+Shift+G", &taken).unwrap(), None);
     }
 }
