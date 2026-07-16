@@ -16,6 +16,7 @@ import {
   useSettings,
   type AiSettings,
   type ProviderId,
+  type Settings,
 } from "@/lib/settings-store";
 
 interface ProviderMeta {
@@ -70,35 +71,60 @@ interface TestState {
 export default function ProvidersPage() {
   const settings = useSettings((s) => s.settings);
   const update = useSettings((s) => s.update);
+  const load = useSettings((s) => s.load);
   // null = "show the active provider's tab" (until the user picks one).
   const [selected, setSelected] = useState<ProviderId | null>(null);
   const [isKeyStored, setIsKeyStored] = useState(false);
   const [keyDraft, setKeyDraft] = useState("");
   const [keyError, setKeyError] = useState<string | null>(null);
   const [test, setTest] = useState<TestState>({ status: "idle", message: "" });
+  const [error, setError] = useState<string | null>(null);
 
   const activeId = settings?.ai.activeProvider ?? "openai_compatible";
   const selectedId = selected ?? activeId;
   const meta = PROVIDERS.find((p) => p.id === selectedId) ?? PROVIDERS[0];
 
   useEffect(() => {
+    let stale = false;
     setKeyDraft("");
     setKeyError(null);
     setTest({ status: "idle", message: "" });
     hasApiKey(meta.id)
-      .then(setIsKeyStored)
-      .catch((e: unknown) => setKeyError(String(e)));
+      .then((stored) => {
+        if (!stale) setIsKeyStored(stored);
+      })
+      .catch((e: unknown) => {
+        if (!stale) setKeyError(String(e));
+      });
+    return () => {
+      stale = true;
+    };
   }, [meta.id]);
 
   if (!settings) return null;
   const cfg = settings.ai[meta.settingsKey];
   const isActive = meta.id === activeId;
 
+  // update() is optimistic; on rejection re-load so the UI shows reality.
+  const safeUpdate = async (patch: Partial<Settings>) => {
+    setError(null);
+    try {
+      await update(patch);
+    } catch (e: unknown) {
+      setError(String(e));
+      try {
+        await load();
+      } catch (reloadError: unknown) {
+        setError(`${String(e)} (could not refresh settings: ${String(reloadError)})`);
+      }
+    }
+  };
+
   const patchProvider = (patch: Partial<{ baseUrl: string; model: string }>) =>
-    update({ ai: { ...settings.ai, [meta.settingsKey]: { ...cfg, ...patch } } });
+    void safeUpdate({ ai: { ...settings.ai, [meta.settingsKey]: { ...cfg, ...patch } } });
 
   const setActive = () =>
-    update({ ai: { ...settings.ai, activeProvider: meta.id } });
+    void safeUpdate({ ai: { ...settings.ai, activeProvider: meta.id } });
 
   const saveKey = async () => {
     setKeyError(null);
@@ -130,6 +156,8 @@ export default function ProvidersPage() {
           is used.
         </p>
       </div>
+
+      {error && <p className="text-destructive text-sm">{error}</p>}
 
       <Tabs value={meta.id} onValueChange={(v) => setSelected(v as ProviderId)}>
         <TabsList>
