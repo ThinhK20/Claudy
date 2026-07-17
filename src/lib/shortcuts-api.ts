@@ -19,3 +19,11 @@ export const checkShortcut = (
     excludePromptId: opts.excludePromptId ?? null,
     forDictation: opts.forDictation ?? false,
   });
+
+/** Release every global shortcut so a recorder can capture live combos. */
+export const suspendGlobalShortcuts = (): Promise<void> =>
+  invoke("suspend_global_shortcuts");
+
+/** Re-register all global shortcuts from stored settings/prompts. */
+export const resumeGlobalShortcuts = (): Promise<void> =>
+  invoke("resume_global_shortcuts");

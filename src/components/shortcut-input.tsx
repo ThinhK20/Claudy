@@ -1,6 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { checkShortcut } from "@/lib/shortcuts-api";
+import {
+  checkShortcut,
+  resumeGlobalShortcuts,
+  suspendGlobalShortcuts,
+} from "@/lib/shortcuts-api";
 import { cn } from "@/lib/utils";
 
 /** Keys that never terminate a capture on their own. */
@@ -55,6 +59,41 @@ export function ShortcutInput({
 }: ShortcutInputProps) {
   const [capturing, setCapturing] = useState(false);
   const [warning, setWarning] = useState("");
+  const capturingRef = useRef(false);
+
+  // Registered combos are consumed by the OS (RegisterHotKey) and never
+  // reach the webview, so capture releases ALL global shortcuts first.
+  // Suspend is best-effort: if it fails, capture still works for combos
+  // the OS doesn't consume.
+  const startCapture = () => {
+    if (capturingRef.current) return;
+    capturingRef.current = true;
+    setCapturing(true);
+    void suspendGlobalShortcuts().catch(() => {});
+  };
+
+  // Single-shot exit funnel for every path (accepted combo, Escape, clear,
+  // blur, unmount). Resume must COMPLETE before the caller's onChange runs:
+  // update_settings re-registers the dictation combo and errors if the old
+  // one isn't currently registered.
+  const endCapture = async () => {
+    if (!capturingRef.current) return;
+    capturingRef.current = false;
+    setCapturing(false);
+    try {
+      await resumeGlobalShortcuts();
+    } catch {
+      // Healed at next app start by shortcuts::init.
+    }
+  };
+
+  // Unmount while capturing (e.g. editor dialog closed): restore shortcuts.
+  useEffect(() => {
+    return () => {
+      void endCapture();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Live conflict warning for the current value (also validates the
   // pre-existing value when an editor opens).
@@ -81,21 +120,15 @@ export function ShortcutInput({
     e.preventDefault();
     e.stopPropagation();
     if (e.key === "Escape") {
-      setCapturing(false);
+      void endCapture();
       return;
     }
     if (e.key === "Backspace" || e.key === "Delete") {
-      if (allowClear) {
-        onChange("");
-        setCapturing(false);
-      }
+      if (allowClear) void endCapture().then(() => onChange(""));
       return;
     }
     const accel = acceleratorFromEvent(e);
-    if (accel) {
-      onChange(accel);
-      setCapturing(false);
-    }
+    if (accel) void endCapture().then(() => onChange(accel));
   };
 
   return (
@@ -104,9 +137,9 @@ export function ShortcutInput({
         <Button
           type="button"
           variant="outline"
-          onClick={() => setCapturing(true)}
+          onClick={startCapture}
           onKeyDown={onKeyDown}
-          onBlur={() => setCapturing(false)}
+          onBlur={() => void endCapture()}
           className={cn(
             "w-56 justify-start font-mono",
             capturing && "ring-ring ring-2",
