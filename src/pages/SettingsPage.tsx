@@ -7,9 +7,22 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { ShortcutInput } from "@/components/shortcut-input";
 import { useSettings, type Settings } from "@/lib/settings-store";
+
+const THEMES: { value: Settings["theme"]; label: string }[] = [
+  { value: "system", label: "System" },
+  { value: "light", label: "Light" },
+  { value: "dark", label: "Dark" },
+];
 
 interface ToggleRowProps {
   label: string;
@@ -78,6 +91,38 @@ export default function SettingsPage() {
             forDictation
             allowClear={false}
           />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Appearance</CardTitle>
+          <CardDescription>Color theme for the main window</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <Label>Theme</Label>
+              <p className="text-muted-foreground text-sm">
+                System follows your OS light/dark preference
+              </p>
+            </div>
+            <Select
+              value={settings.theme}
+              onValueChange={(v) => void safeUpdate({ theme: v as Settings["theme"] })}
+            >
+              <SelectTrigger className="w-32">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {THEMES.map((t) => (
+                  <SelectItem key={t.value} value={t.value}>
+                    {t.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
         </CardContent>
       </Card>
 
