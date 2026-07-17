@@ -42,7 +42,19 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["nsis"],
+    "publisher": "Claudy",
+    "copyright": "Copyright © 2026 Claudy",
+    "category": "Productivity",
+    "shortDescription": "Voice dictation and AI text prompts for any app",
+    "longDescription": "Claudy is a desktop assistant for voice dictation and AI-powered text prompts. Dictate into any application with local Whisper transcription, and transform selected text with configurable AI prompts triggered by global shortcuts.",
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": ["English"],
+        "displayLanguageSelector": false
+      }
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
