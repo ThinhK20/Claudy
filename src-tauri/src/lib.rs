@@ -1,4 +1,5 @@
 mod ai;
+mod assistant;
 mod audio;
 mod config;
 mod dictation;
@@ -14,6 +15,7 @@ mod selection;
 mod shortcuts;
 mod stt;
 mod tray;
+mod tts;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -36,6 +38,8 @@ pub fn run() {
         .manage(audio::AudioState::default())
         .manage(stt::SttState::default())
         .manage(dictation::DictationState::default())
+        .manage(assistant::AssistantState::default())
+        .manage(tts::TtsState::default())
         .manage(prompt_flow::PromptFlowState::default())
         .manage(shortcuts::PromptShortcuts::default())
         .invoke_handler(tauri::generate_handler![
@@ -58,14 +62,23 @@ pub fn run() {
             models::delete_model,
             models::get_models_dir,
             download::download_model,
+            download::download_tts_model,
             download::cancel_model_download,
+            tts::tts_model_status,
+            tts::delete_tts_model,
             audio::list_audio_devices,
             audio::start_capture,
             audio::stop_capture,
             stt::stop_capture_and_transcribe,
             inject::paste_text,
             dictation::toggle_dictation,
-            dictation::get_dictation_state
+            dictation::get_dictation_state,
+            assistant::ask_assistant,
+            assistant::close_assistant,
+            assistant::assistant_new_question,
+            assistant::stop_assistant_speech,
+            assistant::replay_assistant_speech,
+            assistant::get_assistant_state
         ])
         .setup(|app| {
             tray::create(app.handle())?;
@@ -74,11 +87,26 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            if window.label() == "main" {
-                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                    let _ = window.hide();
-                    api.prevent_close();
+            use tauri::Manager;
+            match window.label() {
+                "main" => {
+                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                        let _ = window.hide();
+                        api.prevent_close();
+                    }
                 }
+                "assistant" => {
+                    // Blur-dismiss, but only while still typing — losing focus
+                    // after an answer is shown must not close the panel.
+                    if let tauri::WindowEvent::Focused(false) = event {
+                        let app = window.app_handle();
+                        let phase = *app.state::<assistant::AssistantState>().phase.lock().unwrap();
+                        if phase == assistant::Phase::Input {
+                            assistant::close(app);
+                        }
+                    }
+                }
+                _ => {}
             }
         })
         .run(tauri::generate_context!())

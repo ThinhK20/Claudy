@@ -39,6 +39,11 @@ enigo = "0.6"
 keyring = { version = "3", features = ["windows-native", "apple-native", "sync-secret-service"] }
 chrono = "0.4"
 uuid = { version = "1", features = ["v4"] }
+# Local neural TTS. `use-cmudict` = pure-Rust G2P (no system espeak-ng).
+# Pins `ort` (ONNX Runtime) which auto-downloads its native binaries.
+kokoro-tts = { version = "0.3.3", features = ["use-cmudict"] }
+# Audio playback for synthesized speech. `playback` pulls cpal transitively.
+rodio = { version = "0.22", default-features = false, features = ["playback"] }
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-autostart = "2"

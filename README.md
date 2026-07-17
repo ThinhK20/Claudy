@@ -1,9 +1,10 @@
 # Claudy
 
-Claudy is a privacy-first desktop assistant that lives in your system tray and adds two system-wide superpowers to any application via global keyboard shortcuts:
+Claudy is a privacy-first desktop assistant that lives in your system tray and adds three system-wide superpowers to any application via global keyboard shortcuts:
 
 - **Offline voice dictation** — local speech-to-text (whisper.cpp) that types straight into whatever app has focus. Audio never leaves your machine.
 - **AI prompt shortcuts** — user-defined prompts that transform the text you have selected in any app, powered by the AI provider of your choice. The result lands on your clipboard (auto-paste is opt-in); your original selection is never overwritten.
+- **Quick-ask voice assistant** — a global shortcut opens a compact ask box at your cursor; the answer appears in a floating panel and can be read aloud by a local neural voice (Kokoro TTS). Supported providers can search the web to answer.
 
 Built with Tauri 2 and React. Windows-first — macOS and Linux code paths exist but are untested.
 
@@ -21,6 +22,13 @@ Built with Tauri 2 and React. Windows-first — macOS and Linux code paths exist
 - Prompt manager with search, enable/disable, run, delete, and JSON import/export
 - Multiple AI providers behind one interface: **Anthropic**, **OpenAI-compatible** (OpenAI, Groq, etc.), **Google Gemini**, and **Ollama** (local)
 - Per-provider configuration with connection testing; API keys are stored in the OS credential store (Windows Credential Manager / Keychain / Secret Service), never in config files
+
+### Quick-ask voice assistant
+- Global shortcut (default `Ctrl+Shift+Space`) opens a focused ask box anchored at your cursor
+- Answers appear in a floating panel: copy, ask a follow-up, replay, or let it auto-close
+- Optional spoken answers via **local Kokoro TTS** (int8 ONNX, ~115 MB) — fully offline, with selectable voice, speed, and volume; download the voice model on demand from Settings
+- Provider-native web search when enabled: Anthropic `web_search` and Gemini Google Search grounding (silently skipped by providers without it)
+- TTS is best-effort: if the voice model is missing or synthesis fails, the written answer still shows with an inline note
 
 ### App
 - Runs from the system tray; closing the window hides it instead of quitting
@@ -59,14 +67,15 @@ After installing, download a Whisper model from the Transcription page before us
 
 - **Frontend:** React 19, TypeScript, Vite 7, Tailwind CSS v4, shadcn/ui + Radix UI, Zustand
 - **Shell:** Tauri 2 (global-shortcut, clipboard-manager, notification, autostart, store, single-instance plugins)
-- **Rust core:** whisper-rs (STT), cpal (audio capture), enigo (input simulation), keyring (secrets), reqwest + tokio (AI providers)
+- **Rust core:** whisper-rs (STT), kokoro-tts + ort/ONNX Runtime (local TTS), cpal (audio capture) + rodio (playback), enigo (input simulation), keyring (secrets), reqwest + tokio (AI providers)
 
 ## Project layout
 
 ```
 src/                React UI (pages, components, Tauri API bridges in src/lib)
 src-tauri/src/      Rust core: audio, stt, models, shortcuts, selection,
-                    inject, prompts, prompt_flow, tray, overlay, ai/ providers
+                    inject, prompts, prompt_flow, tray, overlay, assistant,
+                    ai/ providers, tts/ (kokoro engine + playback)
 docs/BUILDING.md    Platform build instructions
 docs/superpowers/   Design spec and phase-by-phase implementation plans
 models/             Locally downloaded Whisper models (gitignored)

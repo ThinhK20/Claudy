@@ -16,6 +16,17 @@ export interface AiSettings {
   gemini: ProviderSettings;
 }
 
+export interface AssistantSettings {
+  shortcut: string;
+  ttsVoice: string;
+  speechSpeed: number;
+  volume: number;
+  autoSpeak: boolean;
+  autoWebSearch: boolean;
+  panelCloseSecs: number;
+  keepOpenWhileSpeaking: boolean;
+}
+
 export interface Settings {
   theme: "light" | "dark" | "system";
   language: string;
@@ -29,6 +40,7 @@ export interface Settings {
   startMinimized: boolean;
   modelsDirOverride: string;
   ai: AiSettings;
+  assistant: AssistantSettings;
 }
 
 interface SettingsState {

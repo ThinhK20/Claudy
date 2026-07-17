@@ -34,6 +34,20 @@
         "resizable": false,
         "shadow": false,
         "focus": false
+      },
+      {
+        "label": "assistant",
+        "title": "Claudy Assistant",
+        "width": 420,
+        "height": 150,
+        "visible": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "decorations": false,
+        "resizable": false,
+        "shadow": false,
+        "focus": false
       }
     ],
     "security": {

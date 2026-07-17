@@ -33,13 +33,44 @@ impl AiProvider for Gemini {
         })
     }
 
+    fn supports_web_search(&self) -> bool {
+        true
+    }
+
+    fn build_request_with(
+        &self,
+        cfg: &ProviderSettings,
+        api_key: Option<&str>,
+        prompt: &str,
+        opts: super::RequestOptions,
+    ) -> Result<HttpRequest, String> {
+        let mut req = self.build_request(cfg, api_key, prompt)?;
+        if opts.web_search {
+            // Google Search grounding: Gemini decides when to search and
+            // grounds its answer in the results.
+            req.body["tools"] = serde_json::json!([{ "google_search": {} }]);
+        }
+        Ok(req)
+    }
+
+    /// Concatenate all text parts of the first candidate — grounded answers can
+    /// split the response across multiple parts.
     fn parse_response(&self, body: &str) -> Result<String, String> {
         let v: serde_json::Value =
             serde_json::from_str(body).map_err(|e| format!("Unexpected response: {e}"))?;
-        v.pointer("/candidates/0/content/parts/0/text")
-            .and_then(|c| c.as_str())
-            .map(|s| s.trim().to_string())
-            .ok_or_else(|| "Unexpected response shape (no candidates[0].content.parts[0].text)".into())
+        let parts = v
+            .pointer("/candidates/0/content/parts")
+            .and_then(|p| p.as_array())
+            .ok_or("Unexpected response shape (no candidates[0].content.parts)")?;
+        let text: String = parts
+            .iter()
+            .filter_map(|p| p.get("text").and_then(|t| t.as_str()))
+            .collect();
+        let text = text.trim().to_string();
+        if text.is_empty() {
+            return Err("Unexpected response shape (no text parts)".into());
+        }
+        Ok(text)
     }
 }
 
@@ -67,9 +98,35 @@ mod tests {
     }
 
     #[test]
-    fn parses_the_first_candidate_part() {
+    fn parses_and_concatenates_candidate_parts() {
         let body = r#"{"candidates":[{"content":{"parts":[{"text":" Hello "}],"role":"model"}}]}"#;
         assert_eq!(Gemini.parse_response(body).unwrap(), "Hello");
         assert!(Gemini.parse_response(r#"{"candidates":[]}"#).is_err());
+
+        let multi = r#"{"candidates":[{"content":{"parts":[
+            {"text":"The score "},
+            {"text":"was 3-1."}
+        ]}}]}"#;
+        assert_eq!(Gemini.parse_response(multi).unwrap(), "The score was 3-1.");
+    }
+
+    #[test]
+    fn google_search_tool_added_only_when_requested() {
+        let cfg = ProviderSettings::default();
+        let off = Gemini
+            .build_request_with(&cfg, Some("k"), "Hi", super::super::RequestOptions::default())
+            .unwrap();
+        assert!(off.body.get("tools").is_none());
+
+        let on = Gemini
+            .build_request_with(
+                &cfg,
+                Some("k"),
+                "Hi",
+                super::super::RequestOptions { web_search: true },
+            )
+            .unwrap();
+        assert!(on.body["tools"][0].get("google_search").is_some());
+        assert!(Gemini.supports_web_search());
     }
 }

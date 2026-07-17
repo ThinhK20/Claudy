@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager};
 
-use crate::{config, models};
+use crate::{config, models, tts};
 
 /// Per-model cancellation flags for in-flight downloads.
 #[derive(Default)]
@@ -47,26 +47,56 @@ fn progress(id: &str, downloaded: u64, total: u64, status: &str, message: Option
 
 #[tauri::command]
 pub async fn download_model(app: AppHandle, id: String) -> Result<(), String> {
+    let spec = models::catalog_get(&id).ok_or_else(|| format!("Unknown model '{id}'"))?;
+    let dir = models::resolve_dir(&config::load(&app)?.models_dir_override);
+    let final_path = dir.join(models::model_filename(&id));
+    if final_path.is_file() {
+        return Err(format!("Model '{id}' is already downloaded"));
+    }
+    tracked_download(&app, &id, models::model_url(&id), final_path, Some(spec.sha1)).await
+}
+
+/// Download a Kokoro TTS asset (`kokoro-model` / `kokoro-voices`) through the
+/// same cancellation map and progress events as Whisper models.
+#[tauri::command]
+pub async fn download_tts_model(app: AppHandle, id: String) -> Result<(), String> {
+    let asset = tts::asset_get(&id).ok_or_else(|| format!("Unknown TTS asset '{id}'"))?;
+    let dir = models::resolve_dir(&config::load(&app)?.models_dir_override);
+    let final_path = dir.join(asset.filename);
+    if final_path.is_file() {
+        return Err(format!("'{id}' is already downloaded"));
+    }
+    tracked_download(&app, &id, asset.url.to_string(), final_path, asset.sha1).await
+}
+
+/// Register `id` in the cancellation map, run the download, then clean up and
+/// emit a terminal error/cancelled event on failure. Shared by every
+/// downloadable asset so cancellation and progress reporting stay uniform.
+async fn tracked_download(
+    app: &AppHandle,
+    id: &str,
+    url: String,
+    final_path: std::path::PathBuf,
+    expected_sha1: Option<&str>,
+) -> Result<(), String> {
     let cancel = Arc::new(AtomicBool::new(false));
     {
-        let state = app.state::<Downloads>();
-        let mut map = state.0.lock().map_err(|_| "downloads state poisoned")?;
-        if map.contains_key(&id) {
-            return Err(format!("Model '{id}' is already downloading"));
+        let downloads = app.state::<Downloads>();
+        let mut map = downloads.0.lock().map_err(|_| "downloads state poisoned")?;
+        if map.contains_key(id) {
+            return Err(format!("'{id}' is already downloading"));
         }
-        map.insert(id.clone(), cancel.clone());
+        map.insert(id.to_string(), cancel.clone());
     }
 
-    let result = run_download(&app, &id, cancel).await;
+    let result = download_file(app, id, &url, &final_path, expected_sha1, cancel).await;
 
-    let state = app.state::<Downloads>();
-    if let Ok(mut map) = state.0.lock() {
-        map.remove(&id);
+    if let Ok(mut map) = app.state::<Downloads>().0.lock() {
+        map.remove(id);
     }
-
     if let Err(e) = &result {
         let status = if e == "cancelled" { "cancelled" } else { "error" };
-        emit_progress(&app, progress(&id, 0, 0, status, Some(e.clone())));
+        emit_progress(app, progress(id, 0, 0, status, Some(e.clone())));
     }
     result
 }
@@ -84,22 +114,32 @@ pub fn cancel_model_download(app: AppHandle, id: String) -> Result<(), String> {
     }
 }
 
-async fn run_download(app: &AppHandle, id: &str, cancel: Arc<AtomicBool>) -> Result<(), String> {
+/// Generic resumable download to `final_path` with progress events and an
+/// optional SHA-1 integrity check. Keeps a `<name>.part` file so a cancelled or
+/// interrupted transfer can resume via an HTTP Range request.
+async fn download_file(
+    app: &AppHandle,
+    id: &str,
+    url: &str,
+    final_path: &Path,
+    expected_sha1: Option<&str>,
+    cancel: Arc<AtomicBool>,
+) -> Result<(), String> {
     use futures_util::StreamExt;
     use tokio::io::AsyncWriteExt;
 
-    let spec = models::catalog_get(id).ok_or_else(|| format!("Unknown model '{id}'"))?;
-    let settings = config::load(app)?;
-    let dir = models::resolve_dir(&settings.models_dir_override);
-    tokio::fs::create_dir_all(&dir)
+    let dir = final_path
+        .parent()
+        .ok_or("Invalid destination path (no parent directory)")?;
+    tokio::fs::create_dir_all(dir)
         .await
-        .map_err(|e| format!("Could not create models dir: {e}"))?;
+        .map_err(|e| format!("Could not create download dir: {e}"))?;
 
-    let final_path = dir.join(models::model_filename(id));
-    let part_path = dir.join(format!("{}.part", models::model_filename(id)));
-    if final_path.is_file() {
-        return Err(format!("Model '{id}' is already downloaded"));
-    }
+    let file_name = final_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or("Invalid destination filename")?;
+    let part_path = dir.join(format!("{file_name}.part"));
 
     // Resume from a previous partial download if present.
     let mut offset = match tokio::fs::metadata(&part_path).await {
@@ -108,7 +148,7 @@ async fn run_download(app: &AppHandle, id: &str, cancel: Arc<AtomicBool>) -> Res
     };
 
     let client = reqwest::Client::new();
-    let mut req = client.get(models::model_url(id));
+    let mut req = client.get(url);
     if offset > 0 {
         req = req.header("Range", format!("bytes={offset}-"));
     }
@@ -155,22 +195,24 @@ async fn run_download(app: &AppHandle, id: &str, cancel: Arc<AtomicBool>) -> Res
     file.flush().await.map_err(|e| format!("Write failed: {e}"))?;
     drop(file);
 
-    emit_progress(app, progress(id, downloaded, total, "verifying", None));
-    let expected = spec.sha1;
-    let verify_path = part_path.clone();
-    let actual = tauri::async_runtime::spawn_blocking(move || sha1_hex_of_file(&verify_path))
-        .await
-        .map_err(|e| format!("Verification task failed: {e}"))??;
-    if actual != expected {
-        tokio::fs::remove_file(&part_path).await.ok(); // corrupt — don't resume from it
-        return Err(format!(
-            "Checksum mismatch for '{id}' (expected {expected}, got {actual}). The download was discarded; please retry."
-        ));
+    if let Some(expected) = expected_sha1 {
+        emit_progress(app, progress(id, downloaded, total, "verifying", None));
+        let expected = expected.to_string();
+        let verify_path = part_path.clone();
+        let actual = tauri::async_runtime::spawn_blocking(move || sha1_hex_of_file(&verify_path))
+            .await
+            .map_err(|e| format!("Verification task failed: {e}"))??;
+        if actual != expected {
+            tokio::fs::remove_file(&part_path).await.ok(); // corrupt — don't resume from it
+            return Err(format!(
+                "Checksum mismatch for '{id}' (expected {expected}, got {actual}). The download was discarded; please retry."
+            ));
+        }
     }
 
-    tokio::fs::rename(&part_path, &final_path)
+    tokio::fs::rename(&part_path, final_path)
         .await
-        .map_err(|e| format!("Could not finalize model file: {e}"))?;
+        .map_err(|e| format!("Could not finalize download: {e}"))?;
     emit_progress(app, progress(id, downloaded, total, "done", None));
     Ok(())
 }

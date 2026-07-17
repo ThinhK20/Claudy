@@ -13,6 +13,14 @@ pub struct HttpRequest {
     pub body: serde_json::Value,
 }
 
+/// Per-request switches that aren't part of the stored provider config. v1
+/// carries only web search; kept as a struct so new switches don't churn
+/// every call site.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RequestOptions {
+    pub web_search: bool,
+}
+
 /// Adding a provider = one new file implementing this + one registry line.
 pub trait AiProvider: Sync {
     fn id(&self) -> &'static str;
@@ -25,6 +33,25 @@ pub trait AiProvider: Sync {
     ) -> Result<HttpRequest, String>;
     /// Extract the completion text from a 2xx response body.
     fn parse_response(&self, body: &str) -> Result<String, String>;
+
+    /// Does this provider offer a native web-search tool? Overridden per
+    /// provider in Phase 2; defaults to false so ollama/openai_compatible
+    /// silently no-op.
+    fn supports_web_search(&self) -> bool {
+        false
+    }
+
+    /// Build a request honoring `RequestOptions`. Defaults to `build_request`
+    /// (ignoring options) so providers opt in by overriding only this.
+    fn build_request_with(
+        &self,
+        cfg: &crate::config::ProviderSettings,
+        api_key: Option<&str>,
+        prompt: &str,
+        _opts: RequestOptions,
+    ) -> Result<HttpRequest, String> {
+        self.build_request(cfg, api_key, prompt)
+    }
 }
 
 pub mod anthropic;
@@ -94,9 +121,15 @@ pub async fn send(req: HttpRequest) -> Result<String, String> {
     Ok(body)
 }
 
-/// Full completion against a SPECIFIC provider (Task 4's `test_provider`
-/// uses this directly).
-pub async fn complete_with(app: &AppHandle, provider_id: &str, prompt: &str) -> Result<String, String> {
+/// Core completion against a SPECIFIC provider with explicit request options.
+/// Uses `build_request_with`, so a provider that ignores options behaves
+/// exactly as before.
+pub async fn complete_provider_with_options(
+    app: &AppHandle,
+    provider_id: &str,
+    prompt: &str,
+    opts: RequestOptions,
+) -> Result<String, String> {
     let settings = crate::config::load(app)?;
     let p = provider(provider_id)?;
     let key = crate::secrets::get(provider_id)?;
@@ -105,15 +138,44 @@ pub async fn complete_with(app: &AppHandle, provider_id: &str, prompt: &str) -> 
             "No API key configured for {provider_id} — add one on the Providers page"
         ));
     }
-    let req = p.build_request(settings.ai.provider(provider_id)?, key.as_deref(), prompt)?;
+    let req = p.build_request_with(
+        settings.ai.provider(provider_id)?,
+        key.as_deref(),
+        prompt,
+        opts,
+    )?;
     let body = send(req).await?;
     p.parse_response(&body)
+}
+
+/// Full completion against a SPECIFIC provider (Task 4's `test_provider`
+/// uses this directly). No request options — plain behavior.
+pub async fn complete_with(app: &AppHandle, provider_id: &str, prompt: &str) -> Result<String, String> {
+    complete_provider_with_options(app, provider_id, prompt, RequestOptions::default()).await
 }
 
 /// Full completion against the ACTIVE provider from settings.
 pub async fn complete(app: &AppHandle, prompt: &str) -> Result<String, String> {
     let id = crate::config::load(app)?.ai.active_provider;
     complete_with(app, &id, prompt).await
+}
+
+/// Full completion against the ACTIVE provider honoring request options
+/// (used by the quick-ask assistant for provider-native web search).
+pub async fn complete_with_options(
+    app: &AppHandle,
+    prompt: &str,
+    opts: RequestOptions,
+) -> Result<String, String> {
+    let id = crate::config::load(app)?.ai.active_provider;
+    complete_provider_with_options(app, &id, prompt, opts).await
+}
+
+/// Whether the ACTIVE provider offers native web search (assistant uses this
+/// to decide whether to request it).
+pub fn active_provider_supports_web_search(app: &AppHandle) -> Result<bool, String> {
+    let id = crate::config::load(app)?.ai.active_provider;
+    Ok(provider(&id)?.supports_web_search())
 }
 
 /// Connection test for the Providers page: cheapest possible round trip
@@ -147,6 +209,26 @@ mod tests {
     fn every_config_provider_id_resolves_in_the_registry() {
         for id in crate::config::PROVIDER_IDS {
             assert_eq!(provider(id).unwrap().id(), id, "registry mismatch for {id}");
+        }
+    }
+
+    #[test]
+    fn providers_without_web_search_ignore_options_and_stay_identical() {
+        // ollama & openai_compatible don't override the defaults: no web
+        // search, and build_request_with == build_request regardless of opts.
+        let cfg = crate::config::ProviderSettings {
+            base_url: "http://x/v1".into(),
+            model: "m".into(),
+        };
+        for id in ["ollama", "openai_compatible"] {
+            let p = provider(id).unwrap();
+            assert!(!p.supports_web_search(), "{id} should not support web search");
+            let plain = p.build_request(&cfg, Some("k"), "Hi").unwrap();
+            let with = p
+                .build_request_with(&cfg, Some("k"), "Hi", RequestOptions { web_search: true })
+                .unwrap();
+            assert_eq!(plain.url, with.url, "{id} url changed");
+            assert_eq!(plain.body, with.body, "{id} body changed despite no web search");
         }
     }
 

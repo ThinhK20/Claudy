@@ -12,12 +12,13 @@ export interface ShortcutCheck {
  */
 export const checkShortcut = (
   accel: string,
-  opts: { excludePromptId?: string; forDictation?: boolean } = {},
+  opts: { excludePromptId?: string; forDictation?: boolean; forAssistant?: boolean } = {},
 ): Promise<ShortcutCheck> =>
   invoke("check_shortcut", {
     accel,
     excludePromptId: opts.excludePromptId ?? null,
     forDictation: opts.forDictation ?? false,
+    forAssistant: opts.forAssistant ?? false,
   });
 
 /** Release every global shortcut so a recorder can capture live combos. */

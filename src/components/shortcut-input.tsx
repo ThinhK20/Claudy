@@ -46,6 +46,8 @@ interface ShortcutInputProps {
   excludePromptId?: string;
   /** True when editing the dictation combo itself. */
   forDictation?: boolean;
+  /** True when editing the assistant combo itself. */
+  forAssistant?: boolean;
   /** false = an empty binding is not allowed (dictation must stay bound). */
   allowClear?: boolean;
 }
@@ -55,6 +57,7 @@ export function ShortcutInput({
   onChange,
   excludePromptId,
   forDictation = false,
+  forAssistant = false,
   allowClear = true,
 }: ShortcutInputProps) {
   const [capturing, setCapturing] = useState(false);
@@ -103,7 +106,7 @@ export function ShortcutInput({
       setWarning("");
       return;
     }
-    checkShortcut(value, { excludePromptId, forDictation })
+    checkShortcut(value, { excludePromptId, forDictation, forAssistant })
       .then((check) => {
         if (!stale) setWarning(check.ok ? "" : check.message);
       })
@@ -113,7 +116,7 @@ export function ShortcutInput({
     return () => {
       stale = true;
     };
-  }, [value, excludePromptId, forDictation]);
+  }, [value, excludePromptId, forDictation, forAssistant]);
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLButtonElement>) => {
     if (!capturing) return;

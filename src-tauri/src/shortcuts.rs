@@ -28,11 +28,28 @@ fn on_dictation_shortcut(app: &AppHandle, shortcut: Shortcut) -> Result<(), Stri
         .map_err(|e| e.to_string())
 }
 
-/// Live (re-)registration: unregister `old` (if any), register `new`.
-/// If `new` fails (another app owns the combo), restoring the old binding is
-/// attempted so dictation keeps working; a failed restore is reported in the
-/// returned error rather than silently leaving no shortcut bound.
-pub fn register_dictation(app: &AppHandle, old: Option<&str>, new: &str) -> Result<(), String> {
+fn on_assistant_shortcut(app: &AppHandle, shortcut: Shortcut) -> Result<(), String> {
+    app.global_shortcut()
+        .on_shortcut(shortcut, |app, _shortcut, event| {
+            if event.state == ShortcutState::Pressed {
+                crate::assistant::toggle(app);
+            }
+        })
+        .map_err(|e| e.to_string())
+}
+
+/// Live (re-)registration for one reserved combo: unregister `old` (if any),
+/// register `new`. If `new` fails (another app owns the combo), restoring the
+/// old binding is attempted so the feature keeps working; a failed restore is
+/// reported in the returned error rather than silently leaving nothing bound.
+/// `label` names the feature ("dictation" / "assistant") in error text.
+fn register_reserved(
+    app: &AppHandle,
+    old: Option<&str>,
+    new: &str,
+    label: &str,
+    register: fn(&AppHandle, Shortcut) -> Result<(), String>,
+) -> Result<(), String> {
     let shortcut = parse(new)?;
     if let Some(old_accel) = old {
         if let Ok(old_shortcut) = parse(old_accel) {
@@ -43,12 +60,12 @@ pub fn register_dictation(app: &AppHandle, old: Option<&str>, new: &str) -> Resu
             }
         }
     }
-    if let Err(e) = on_dictation_shortcut(app, shortcut) {
+    if let Err(e) = register(app, shortcut) {
         if let Some(old_accel) = old {
             if let Ok(old_shortcut) = parse(old_accel) {
-                if let Err(restore_err) = on_dictation_shortcut(app, old_shortcut) {
+                if let Err(restore_err) = register(app, old_shortcut) {
                     return Err(format!(
-                        "Could not register \"{new}\": {e}; restoring \"{old_accel}\" also failed — dictation shortcut is currently unbound: {restore_err}"
+                        "Could not register \"{new}\": {e}; restoring \"{old_accel}\" also failed — {label} shortcut is currently unbound: {restore_err}"
                     ));
                 }
             }
@@ -56,6 +73,16 @@ pub fn register_dictation(app: &AppHandle, old: Option<&str>, new: &str) -> Resu
         return Err(format!("Could not register \"{new}\": {e}"));
     }
     Ok(())
+}
+
+/// Live (re-)registration of the dictation combo. See [`register_reserved`].
+pub fn register_dictation(app: &AppHandle, old: Option<&str>, new: &str) -> Result<(), String> {
+    register_reserved(app, old, new, "dictation", on_dictation_shortcut)
+}
+
+/// Live (re-)registration of the assistant combo. See [`register_reserved`].
+pub fn register_assistant(app: &AppHandle, old: Option<&str>, new: &str) -> Result<(), String> {
+    register_reserved(app, old, new, "assistant", on_assistant_shortcut)
 }
 
 /// Currently registered prompt shortcuts: accel string (as stored on the
@@ -66,14 +93,18 @@ pub fn register_dictation(app: &AppHandle, old: Option<&str>, new: &str) -> Resu
 pub struct PromptShortcuts(pub Mutex<HashMap<String, String>>);
 
 /// Pure: which (accel, prompt_id) pairs SHOULD be registered, plus warnings
-/// for prompts whose binding was skipped (invalid accelerator, dictation
-/// conflict, duplicate combo). Comparison happens on PARSED shortcuts so
-/// "Ctrl+G" and "Control+G" count as the same combo.
+/// for prompts whose binding was skipped (invalid accelerator, reserved-combo
+/// conflict, duplicate combo). `reserved` is a list of (label, accel) app
+/// combos a prompt may not reuse (dictation + assistant). Comparison happens
+/// on PARSED shortcuts so "Ctrl+G" and "Control+G" count as the same combo.
 pub fn desired_prompt_bindings(
     list: &[crate::prompts::Prompt],
-    dictation_accel: &str,
+    reserved: &[(&str, &str)],
 ) -> (Vec<(String, String)>, Vec<String>) {
-    let dictation = parse(dictation_accel).ok();
+    let reserved: Vec<(&str, Shortcut)> = reserved
+        .iter()
+        .filter_map(|(label, accel)| parse(accel).ok().map(|s| (*label, s)))
+        .collect();
     let mut bindings: Vec<(String, String)> = Vec::new();
     let mut taken: Vec<Shortcut> = Vec::new();
     let mut warnings: Vec<String> = Vec::new();
@@ -88,9 +119,9 @@ pub fn desired_prompt_bindings(
                 continue;
             }
         };
-        if Some(shortcut) == dictation {
+        if let Some((label, _)) = reserved.iter().find(|(_, s)| *s == shortcut) {
             warnings.push(format!(
-                "\"{}\": {} is already the dictation shortcut",
+                "\"{}\": {} is already the {label} shortcut",
                 p.name, p.shortcut
             ));
             continue;
@@ -135,7 +166,13 @@ fn on_prompt_shortcut(app: &AppHandle, accel: &str) -> Result<(), String> {
 pub fn sync_prompts(app: &AppHandle) -> Result<Vec<String>, String> {
     let prompts = crate::prompts::load(app)?;
     let settings = crate::config::load(app)?;
-    let (desired, mut warnings) = desired_prompt_bindings(&prompts, &settings.dictation_shortcut);
+    let (desired, mut warnings) = desired_prompt_bindings(
+        &prompts,
+        &[
+            ("dictation", &settings.dictation_shortcut),
+            ("assistant", &settings.assistant.shortcut),
+        ],
+    );
     let desired: HashMap<String, String> = desired.into_iter().collect();
 
     let state = app.state::<PromptShortcuts>();
@@ -198,8 +235,9 @@ pub struct ShortcutCheck {
 
 /// Live validation for the shortcut editors (spec line 79: conflicts are
 /// surfaced in the UI). `exclude_prompt_id` = the prompt being edited;
-/// `for_dictation` = the dictation combo itself is being edited (then only
-/// prompt shortcuts count as conflicts). A conflict is a WARNING — the
+/// `for_dictation` / `for_assistant` = that reserved combo itself is being
+/// edited (then it is excluded from the conflict set, but the OTHER reserved
+/// combo and all prompt shortcuts still count). A conflict is a WARNING — the
 /// existing sync model skips conflicting bindings with a notification, so
 /// this never blocks a save.
 #[tauri::command]
@@ -208,12 +246,16 @@ pub fn check_shortcut(
     accel: String,
     exclude_prompt_id: Option<String>,
     for_dictation: bool,
+    for_assistant: bool,
 ) -> Result<ShortcutCheck, String> {
     let settings = crate::config::load(&app)?;
     let prompts = crate::prompts::load(&app)?;
     let mut taken: Vec<(String, String)> = Vec::new();
     if !for_dictation {
         taken.push(("the dictation shortcut".into(), settings.dictation_shortcut));
+    }
+    if !for_assistant {
+        taken.push(("the assistant shortcut".into(), settings.assistant.shortcut));
     }
     let exclude = exclude_prompt_id.unwrap_or_default();
     for p in &prompts {
@@ -238,6 +280,9 @@ fn register_all(app: &AppHandle) {
     if let Err(e) = register_dictation(app, None, &settings.dictation_shortcut) {
         // Settings may be unreadable at this point: always show.
         crate::notify::send(app, true, &format!("Dictation shortcut unavailable: {e}"));
+    }
+    if let Err(e) = register_assistant(app, None, &settings.assistant.shortcut) {
+        crate::notify::send(app, true, &format!("Assistant shortcut unavailable: {e}"));
     }
 
     match sync_prompts(app) {
@@ -325,7 +370,7 @@ mod tests {
                 prompt("b", "B", "", true),              // no shortcut
                 prompt("c", "C", "Ctrl+Shift+H", false), // disabled
             ],
-            "Ctrl+Shift+D",
+            &[("dictation", "Ctrl+Shift+D")],
         );
         assert_eq!(bindings, vec![("Ctrl+Shift+G".to_string(), "a".to_string())]);
         assert!(warnings.is_empty(), "got: {warnings:?}");
@@ -334,7 +379,7 @@ mod tests {
     #[test]
     fn desired_bindings_warn_on_invalid_accelerators() {
         let (bindings, warnings) =
-            desired_prompt_bindings(&[prompt("a", "Bad", "NotAKey+Q", true)], "Ctrl+Shift+D");
+            desired_prompt_bindings(&[prompt("a", "Bad", "NotAKey+Q", true)], &[("dictation", "Ctrl+Shift+D")]);
         assert!(bindings.is_empty());
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("Bad"), "got: {}", warnings[0]);
@@ -342,11 +387,28 @@ mod tests {
 
     #[test]
     fn desired_bindings_warn_on_dictation_conflict() {
-        let (bindings, warnings) =
-            desired_prompt_bindings(&[prompt("a", "Clash", "Ctrl+Shift+D", true)], "Ctrl+Shift+D");
+        let (bindings, warnings) = desired_prompt_bindings(
+            &[prompt("a", "Clash", "Ctrl+Shift+D", true)],
+            &[("dictation", "Ctrl+Shift+D")],
+        );
         assert!(bindings.is_empty());
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("dictation"), "got: {}", warnings[0]);
+    }
+
+    #[test]
+    fn desired_bindings_warn_on_assistant_conflict() {
+        // Both reserved combos block a prompt; the assistant one is named.
+        let (bindings, warnings) = desired_prompt_bindings(
+            &[prompt("a", "Clash", "Control+Shift+Space", true)],
+            &[
+                ("dictation", "Ctrl+Shift+D"),
+                ("assistant", "Ctrl+Shift+Space"),
+            ],
+        );
+        assert!(bindings.is_empty());
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("assistant"), "got: {}", warnings[0]);
     }
 
     #[test]
@@ -357,7 +419,7 @@ mod tests {
                 prompt("a", "First", "Ctrl+Shift+G", true),
                 prompt("b", "Second", "Control+Shift+G", true),
             ],
-            "Ctrl+Shift+D",
+            &[("dictation", "Ctrl+Shift+D")],
         );
         assert_eq!(bindings.len(), 1);
         assert_eq!(bindings[0].1, "a");

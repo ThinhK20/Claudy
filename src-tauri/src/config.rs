@@ -49,6 +49,36 @@ impl AiSettings {
     }
 }
 
+/// Quick-ask voice assistant settings (Phase 7). Nested under `Settings`
+/// like `AiSettings`; missing fields fall back to `Default` via serde.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AssistantSettings {
+    pub shortcut: String,   // global combo that opens the ask popup
+    pub tts_voice: String,  // Kokoro voice id, e.g. "af_heart"
+    pub speech_speed: f32,  // 1.0 = normal
+    pub volume: f32,        // 0.0–1.0
+    pub auto_speak: bool,   // speak the answer automatically
+    pub auto_web_search: bool,
+    pub panel_close_secs: u32, // 0 = never auto-close
+    pub keep_open_while_speaking: bool,
+}
+
+impl Default for AssistantSettings {
+    fn default() -> Self {
+        Self {
+            shortcut: "Ctrl+Shift+Space".into(),
+            tts_voice: "af_heart".into(),
+            speech_speed: 1.0,
+            volume: 1.0,
+            auto_speak: true,
+            auto_web_search: false,
+            panel_close_secs: 15,
+            keep_open_while_speaking: true,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Settings {
@@ -64,6 +94,7 @@ pub struct Settings {
     pub start_minimized: bool,
     pub models_dir_override: String, // "" = default project models/ dir
     pub ai: AiSettings,
+    pub assistant: AssistantSettings,
 }
 
 impl Default for Settings {
@@ -81,6 +112,7 @@ impl Default for Settings {
             start_minimized: false,
             models_dir_override: String::new(),
             ai: AiSettings::default(),
+            assistant: AssistantSettings::default(),
         }
     }
 }
@@ -108,17 +140,33 @@ pub fn get_settings(app: AppHandle) -> Result<Settings, String> {
 #[tauri::command]
 pub fn update_settings(app: AppHandle, settings: Settings) -> Result<(), String> {
     let old = load(&app)?;
-    if old.dictation_shortcut != settings.dictation_shortcut {
+    let dictation_changed = old.dictation_shortcut != settings.dictation_shortcut;
+    let assistant_changed = old.assistant.shortcut != settings.assistant.shortcut;
+
+    // Re-register any changed reserved combo BEFORE saving so a failed
+    // registration surfaces as an error and the stored value stays truthful.
+    if dictation_changed {
         crate::shortcuts::register_dictation(
             &app,
             Some(&old.dictation_shortcut),
             &settings.dictation_shortcut,
         )?;
-        save(&app, &settings)?;
-        crate::shortcuts::notify_sync_warnings(&app, &crate::shortcuts::sync_prompts(&app)?);
-        return Ok(());
     }
-    save(&app, &settings)
+    if assistant_changed {
+        crate::shortcuts::register_assistant(
+            &app,
+            Some(&old.assistant.shortcut),
+            &settings.assistant.shortcut,
+        )?;
+    }
+
+    save(&app, &settings)?;
+
+    // A changed reserved combo can free/claim a prompt binding, so reconcile.
+    if dictation_changed || assistant_changed {
+        crate::shortcuts::notify_sync_warnings(&app, &crate::shortcuts::sync_prompts(&app)?);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -170,6 +218,38 @@ mod tests {
         assert_eq!(s.ai.anthropic, ProviderSettings::default());
         let v = serde_json::to_value(&s).unwrap();
         assert!(v["ai"]["openaiCompatible"].get("baseUrl").is_some());
+    }
+
+    #[test]
+    fn assistant_defaults_are_sensible() {
+        let s = Settings::default();
+        assert_eq!(s.assistant.shortcut, "Ctrl+Shift+Space");
+        assert_eq!(s.assistant.tts_voice, "af_heart");
+        assert_eq!(s.assistant.speech_speed, 1.0);
+        assert!(s.assistant.auto_speak);
+        assert!(!s.assistant.auto_web_search, "web search must be opt-in");
+        assert_eq!(s.assistant.panel_close_secs, 15);
+        assert!(s.assistant.keep_open_while_speaking);
+    }
+
+    #[test]
+    fn assistant_settings_round_trip_camel_case_and_fill_missing_with_defaults() {
+        let json = serde_json::json!({
+            "assistant": { "autoWebSearch": true, "ttsVoice": "am_adam" }
+        });
+        let s: Settings = serde_json::from_value(json).unwrap();
+        assert!(s.assistant.auto_web_search);
+        assert_eq!(s.assistant.tts_voice, "am_adam");
+        assert_eq!(s.assistant.shortcut, "Ctrl+Shift+Space"); // missing -> default
+        let v = serde_json::to_value(&s).unwrap();
+        assert!(v["assistant"].get("keepOpenWhileSpeaking").is_some());
+        assert!(v["assistant"].get("panelCloseSecs").is_some());
+    }
+
+    #[test]
+    fn missing_assistant_block_deserializes_to_defaults() {
+        let s: Settings = serde_json::from_value(serde_json::json!({ "theme": "dark" })).unwrap();
+        assert_eq!(s.assistant, AssistantSettings::default());
     }
 
     #[test]
