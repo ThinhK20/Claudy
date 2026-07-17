@@ -31,7 +31,7 @@ pub fn insert_text(app: &AppHandle, text: &str, restore_clipboard: bool) -> Resu
         .map_err(|e| format!("Clipboard write failed: {e}"))?;
     thread::sleep(Duration::from_millis(CLIPBOARD_SETTLE_MS));
 
-    let paste_result = send_ctrl_key('v');
+    let paste_result = send_chord_key('v');
 
     if let Some(prev) = previous {
         // Only wait for the target app to read the new clipboard if the
@@ -53,17 +53,30 @@ pub fn insert_text(app: &AppHandle, text: &str, restore_clipboard: bool) -> Resu
     Ok(())
 }
 
+/// The platform's copy/paste chord modifier: Cmd on macOS, Ctrl elsewhere.
+/// `cfg!` in the initializer keeps both branches type-checked everywhere.
+pub(crate) const CHORD_MODIFIER: Key = if cfg!(target_os = "macos") {
+    Key::Meta
+} else {
+    Key::Control
+};
+pub(crate) const CHORD_LABEL: &str = if cfg!(target_os = "macos") { "Cmd" } else { "Ctrl" };
+
 /// Modifiers the user may still be physically holding from the global
 /// shortcut that triggered us (e.g. the Shift of Ctrl+Shift+G). Left held,
 /// they contaminate the synthetic chord: Ctrl+C becomes Ctrl+Shift+C
 /// (Chrome: DevTools inspect), Ctrl+V becomes Ctrl+Alt+V (Word/Excel:
-/// Paste Special) or Win+Ctrl+V. Ctrl itself is exempt — it is part of
-/// the intended chord.
-const STRAY_MODIFIERS: [Key; 3] = [Key::Shift, Key::Alt, Key::Meta];
+/// Paste Special) or Win+Ctrl+V. The chord modifier itself is exempt —
+/// it is part of the intended chord.
+const STRAY_MODIFIERS: [Key; 3] = if cfg!(target_os = "macos") {
+    [Key::Shift, Key::Alt, Key::Control]
+} else {
+    [Key::Shift, Key::Alt, Key::Meta]
+};
 
-/// Send Ctrl+<c> via input simulation — 'v' pastes (dictation/auto-paste),
-/// 'c' copies (selection probe).
-pub(crate) fn send_ctrl_key(c: char) -> Result<(), String> {
+/// Send <chord modifier>+<c> via input simulation — 'v' pastes
+/// (dictation/auto-paste), 'c' copies (selection probe).
+pub(crate) fn send_chord_key(c: char) -> Result<(), String> {
     // Constructed per call: cheap on Windows, and enigo's default
     // release_keys_when_dropped(true) cleans up stuck keys on error.
     let mut enigo = Enigo::new(&EnigoSettings::default())
@@ -74,13 +87,13 @@ pub(crate) fn send_ctrl_key(c: char) -> Result<(), String> {
         let _ = enigo.key(modifier, Direction::Release);
     }
     enigo
-        .key(Key::Control, Direction::Press)
-        .map_err(|e| format!("Ctrl+{c} keystroke failed: {e}"))?;
+        .key(CHORD_MODIFIER, Direction::Press)
+        .map_err(|e| format!("{CHORD_LABEL}+{c} keystroke failed: {e}"))?;
     let click = enigo.key(Key::Unicode(c), Direction::Click);
     // Always attempt the release, even if the click failed.
-    let release = enigo.key(Key::Control, Direction::Release);
-    click.map_err(|e| format!("Ctrl+{c} keystroke failed: {e}"))?;
-    release.map_err(|e| format!("Could not release Ctrl: {e}"))
+    let release = enigo.key(CHORD_MODIFIER, Direction::Release);
+    click.map_err(|e| format!("{CHORD_LABEL}+{c} keystroke failed: {e}"))?;
+    release.map_err(|e| format!("Could not release {CHORD_LABEL}: {e}"))
 }
 
 /// Manual-verification hook for this phase and the primitive for Phase 4's
@@ -93,4 +106,31 @@ pub async fn paste_text(app: AppHandle, text: String) -> Result<(), String> {
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chord_modifier_matches_the_platform_convention() {
+        if cfg!(target_os = "macos") {
+            assert_eq!(CHORD_MODIFIER, Key::Meta);
+            assert_eq!(CHORD_LABEL, "Cmd");
+        } else {
+            assert_eq!(CHORD_MODIFIER, Key::Control);
+            assert_eq!(CHORD_LABEL, "Ctrl");
+        }
+    }
+
+    #[test]
+    fn stray_modifiers_never_include_the_chord_modifier() {
+        assert!(!STRAY_MODIFIERS.contains(&CHORD_MODIFIER));
+    }
+
+    #[test]
+    fn stray_modifiers_always_release_shift_and_alt() {
+        assert!(STRAY_MODIFIERS.contains(&Key::Shift));
+        assert!(STRAY_MODIFIERS.contains(&Key::Alt));
+    }
 }

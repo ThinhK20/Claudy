@@ -43,7 +43,7 @@ pub fn read(app: &AppHandle) -> Result<Selection, String> {
         .map_err(|e| format!("Clipboard write failed: {e}"))?;
     thread::sleep(Duration::from_millis(SENTINEL_SETTLE_MS));
 
-    let copy_result = crate::inject::send_ctrl_key('c');
+    let copy_result = crate::inject::send_chord_key('c');
     if copy_result.is_ok() {
         thread::sleep(Duration::from_millis(COPY_SETTLE_MS));
     }
