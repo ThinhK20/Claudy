@@ -231,9 +231,9 @@ pub fn check_shortcut(
     })
 }
 
-/// Startup registration from settings. A conflict (combo owned by another
-/// app) is NON-FATAL: notify and keep running — the tray toggle still works.
-pub fn init(app: &AppHandle) {
+/// Register the dictation shortcut and all prompt shortcuts from stored
+/// settings/prompts. Shared by startup `init` and `resume_global_shortcuts`.
+fn register_all(app: &AppHandle) {
     let settings = crate::config::load(app).unwrap_or_default();
     if let Err(e) = register_dictation(app, None, &settings.dictation_shortcut) {
         // Settings may be unreadable at this point: always show.
@@ -244,6 +244,41 @@ pub fn init(app: &AppHandle) {
         Ok(warnings) => notify_sync_warnings(app, &warnings),
         Err(e) => crate::notify::send(app, true, &format!("Prompt shortcuts unavailable: {e}")),
     }
+}
+
+/// Startup registration from settings. A conflict (combo owned by another
+/// app) is NON-FATAL: notify and keep running — the tray toggle still works.
+pub fn init(app: &AppHandle) {
+    register_all(app);
+}
+
+/// Unregister every global shortcut while a ShortcutInput recorder is
+/// capturing — registered combos are consumed by the OS (RegisterHotKey)
+/// and never reach the webview, so capture needs them released.
+/// Idempotent: `unregister_all` on an empty registry is a no-op. The
+/// PromptShortcuts map MUST be cleared too — `sync_prompts` skips accels
+/// already in the map, so stale entries would make resume silently skip
+/// re-binding them.
+#[tauri::command]
+pub fn suspend_global_shortcuts(app: AppHandle) -> Result<(), String> {
+    app.global_shortcut()
+        .unregister_all()
+        .map_err(|e| e.to_string())?;
+    app.state::<PromptShortcuts>().0.lock().unwrap().clear();
+    Ok(())
+}
+
+/// Re-register everything from stored settings/prompts after a capture
+/// ends. Runs the same path as startup, so registration failures surface
+/// as notifications, not errors. Safe to call without a prior suspend.
+#[tauri::command]
+pub fn resume_global_shortcuts(app: AppHandle) -> Result<(), String> {
+    app.global_shortcut()
+        .unregister_all()
+        .map_err(|e| e.to_string())?;
+    app.state::<PromptShortcuts>().0.lock().unwrap().clear();
+    register_all(&app);
+    Ok(())
 }
 
 #[cfg(test)]

@@ -52,6 +52,8 @@ pub fn run() {
             prompts::import_prompts,
             prompt_flow::run_prompt,
             shortcuts::check_shortcut,
+            shortcuts::suspend_global_shortcuts,
+            shortcuts::resume_global_shortcuts,
             models::list_models,
             models::delete_model,
             models::get_models_dir,
