@@ -17,6 +17,7 @@ import {
 import { Slider } from "@/components/ui/slider";
 import { ShortcutInput } from "@/components/shortcut-input";
 import { ToggleRow } from "@/components/toggle-row";
+import { SystemPromptEditor } from "@/components/assistant/system-prompt-editor";
 import { VoiceModelManager } from "@/components/assistant/voice-model-manager";
 import { useSettings, type Settings } from "@/lib/settings-store";
 
@@ -140,6 +141,8 @@ export default function AssistantSettingsPage() {
           </div>
         </CardContent>
       </Card>
+
+      <SystemPromptEditor />
 
       <Card>
         <CardHeader>

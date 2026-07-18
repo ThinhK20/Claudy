@@ -64,6 +64,11 @@ impl AiProvider for Anthropic {
                 "max_uses": WEB_SEARCH_MAX_USES,
             }]);
         }
+        if let Some(system) = super::non_empty_system(&opts) {
+            // Messages API takes the system prompt as a top-level field,
+            // not a message role.
+            req.body["system"] = serde_json::json!(system);
+        }
         Ok(req)
     }
 
@@ -144,12 +149,45 @@ mod tests {
                 &cfg,
                 Some("k"),
                 "Hi",
-                super::super::RequestOptions { web_search: true },
+                super::super::RequestOptions { web_search: true, ..Default::default() },
             )
             .unwrap();
         assert_eq!(on.body["tools"][0]["type"], WEB_SEARCH_TOOL);
         assert_eq!(on.body["tools"][0]["name"], "web_search");
         assert_eq!(on.body["tools"][0]["max_uses"], WEB_SEARCH_MAX_USES);
+    }
+
+    #[test]
+    fn system_prompt_becomes_a_top_level_field_only_when_set() {
+        let cfg = ProviderSettings::default();
+        let off = Anthropic
+            .build_request_with(&cfg, Some("k"), "Hi", super::super::RequestOptions::default())
+            .unwrap();
+        assert!(off.body.get("system").is_none());
+
+        let empty = Anthropic
+            .build_request_with(
+                &cfg,
+                Some("k"),
+                "Hi",
+                super::super::RequestOptions { system: Some("  ".into()), ..Default::default() },
+            )
+            .unwrap();
+        assert!(empty.body.get("system").is_none(), "whitespace-only must be ignored");
+
+        let on = Anthropic
+            .build_request_with(
+                &cfg,
+                Some("k"),
+                "Hi",
+                super::super::RequestOptions {
+                    system: Some("Be brief.\nUse Markdown.".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(on.body["system"], "Be brief.\nUse Markdown.");
+        assert_eq!(on.body["messages"][0]["content"], "Hi", "user prompt untouched");
     }
 
     #[test]

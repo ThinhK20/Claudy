@@ -49,6 +49,10 @@ impl AiSettings {
     }
 }
 
+/// Upper bound for the assistant's custom system prompt. Mirrored by
+/// `MAX_SYSTEM_PROMPT_CHARS` in `src/components/assistant/system-prompt-editor.tsx`.
+pub const MAX_SYSTEM_PROMPT_CHARS: usize = 10_000;
+
 /// Quick-ask voice assistant settings (Phase 7). Nested under `Settings`
 /// like `AiSettings`; missing fields fall back to `Default` via serde.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -62,6 +66,17 @@ pub struct AssistantSettings {
     pub auto_web_search: bool,
     pub panel_close_secs: u32, // 0 = never auto-close
     pub keep_open_while_speaking: bool,
+    pub custom_system_prompt: String, // "" = no system prompt (today's behavior)
+}
+
+impl AssistantSettings {
+    /// The system prompt to send with assistant requests: trimmed, or `None`
+    /// when unset/whitespace-only. Single seam for future prompt profiles,
+    /// templates, or variable expansion.
+    pub fn system_prompt(&self) -> Option<String> {
+        let trimmed = self.custom_system_prompt.trim();
+        if trimmed.is_empty() { None } else { Some(trimmed.to_string()) }
+    }
 }
 
 impl Default for AssistantSettings {
@@ -75,6 +90,7 @@ impl Default for AssistantSettings {
             auto_web_search: false,
             panel_close_secs: 15,
             keep_open_while_speaking: true,
+            custom_system_prompt: String::new(),
         }
     }
 }
@@ -139,6 +155,13 @@ pub fn get_settings(app: AppHandle) -> Result<Settings, String> {
 
 #[tauri::command]
 pub fn update_settings(app: AppHandle, settings: Settings) -> Result<(), String> {
+    // Length-only guard (the UI enforces the rest); anything stricter here
+    // could start rejecting unrelated settings writes.
+    if settings.assistant.custom_system_prompt.chars().count() > MAX_SYSTEM_PROMPT_CHARS {
+        return Err(format!(
+            "Custom system prompt exceeds {MAX_SYSTEM_PROMPT_CHARS} characters — shorten the prompt"
+        ));
+    }
     let old = load(&app)?;
     let dictation_changed = old.dictation_shortcut != settings.dictation_shortcut;
     let assistant_changed = old.assistant.shortcut != settings.assistant.shortcut;
@@ -241,9 +264,35 @@ mod tests {
         assert!(s.assistant.auto_web_search);
         assert_eq!(s.assistant.tts_voice, "am_adam");
         assert_eq!(s.assistant.shortcut, "Ctrl+Shift+Space"); // missing -> default
+        assert_eq!(s.assistant.custom_system_prompt, ""); // missing -> default
         let v = serde_json::to_value(&s).unwrap();
         assert!(v["assistant"].get("keepOpenWhileSpeaking").is_some());
         assert!(v["assistant"].get("panelCloseSecs").is_some());
+        assert!(v["assistant"].get("customSystemPrompt").is_some());
+    }
+
+    #[test]
+    fn custom_system_prompt_round_trips_camel_case() {
+        let json = serde_json::json!({
+            "assistant": { "customSystemPrompt": "Be brief." }
+        });
+        let s: Settings = serde_json::from_value(json).unwrap();
+        assert_eq!(s.assistant.custom_system_prompt, "Be brief.");
+    }
+
+    #[test]
+    fn system_prompt_is_none_when_empty_or_whitespace() {
+        let mut a = AssistantSettings::default();
+        assert_eq!(a.system_prompt(), None, "default must mean no system prompt");
+        a.custom_system_prompt = "  \n\t ".into();
+        assert_eq!(a.system_prompt(), None);
+    }
+
+    #[test]
+    fn system_prompt_trims_ends_but_preserves_interior_line_breaks() {
+        let mut a = AssistantSettings::default();
+        a.custom_system_prompt = "  Answer in Markdown.\n\nBe concise. \n".into();
+        assert_eq!(a.system_prompt().unwrap(), "Answer in Markdown.\n\nBe concise.");
     }
 
     #[test]

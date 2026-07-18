@@ -50,6 +50,12 @@ impl AiProvider for Gemini {
             // grounds its answer in the results.
             req.body["tools"] = serde_json::json!([{ "google_search": {} }]);
         }
+        if let Some(system) = super::non_empty_system(&opts) {
+            // v1beta generateContent takes camelCase `systemInstruction`
+            // with the same parts shape as `contents`.
+            req.body["systemInstruction"] =
+                serde_json::json!({ "parts": [{ "text": system }] });
+        }
         Ok(req)
     }
 
@@ -123,10 +129,36 @@ mod tests {
                 &cfg,
                 Some("k"),
                 "Hi",
-                super::super::RequestOptions { web_search: true },
+                super::super::RequestOptions { web_search: true, ..Default::default() },
             )
             .unwrap();
         assert!(on.body["tools"][0].get("google_search").is_some());
         assert!(Gemini.supports_web_search());
+    }
+
+    #[test]
+    fn system_instruction_added_only_when_set() {
+        let cfg = ProviderSettings::default();
+        let off = Gemini
+            .build_request_with(&cfg, Some("k"), "Hi", super::super::RequestOptions::default())
+            .unwrap();
+        assert!(off.body.get("systemInstruction").is_none());
+
+        let on = Gemini
+            .build_request_with(
+                &cfg,
+                Some("k"),
+                "Hi",
+                super::super::RequestOptions {
+                    system: Some("Be brief.\nUse Markdown.".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            on.body["systemInstruction"]["parts"][0]["text"],
+            "Be brief.\nUse Markdown."
+        );
+        assert_eq!(on.body["contents"][0]["parts"][0]["text"], "Hi", "user prompt untouched");
     }
 }

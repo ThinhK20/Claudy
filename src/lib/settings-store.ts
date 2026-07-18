@@ -25,6 +25,7 @@ export interface AssistantSettings {
   autoWebSearch: boolean;
   panelCloseSecs: number;
   keepOpenWhileSpeaking: boolean;
+  customSystemPrompt: string; // "" = no system prompt (default behavior)
 }
 
 export interface Settings {

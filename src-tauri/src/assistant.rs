@@ -193,11 +193,16 @@ pub fn ask(app: &AppHandle, question: String) {
 
     // Web search only when the user opted in AND the active provider offers a
     // native tool; otherwise it silently no-ops (ollama/openai_compatible).
-    let web_search = config::load(app)
+    let settings = config::load(app).ok();
+    let web_search = settings
+        .as_ref()
         .map(|s| s.assistant.auto_web_search)
         .unwrap_or(false)
         && ai::active_provider_supports_web_search(app).unwrap_or(false);
-    let opts = ai::RequestOptions { web_search };
+    // Custom system prompt (None when unset) — assistant path only; the
+    // dictation flow builds default options and stays system-free.
+    let system = settings.as_ref().and_then(|s| s.assistant.system_prompt());
+    let opts = ai::RequestOptions { web_search, system };
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let result = ai::complete_with_options(&app, &question, opts).await;

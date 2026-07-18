@@ -40,6 +40,22 @@ impl AiProvider for OpenAiCompatible {
         })
     }
 
+    fn build_request_with(
+        &self,
+        cfg: &ProviderSettings,
+        api_key: Option<&str>,
+        prompt: &str,
+        opts: super::RequestOptions,
+    ) -> Result<HttpRequest, String> {
+        let mut req = self.build_request(cfg, api_key, prompt)?;
+        if let Some(system) = super::non_empty_system(&opts) {
+            if let Some(messages) = req.body["messages"].as_array_mut() {
+                messages.insert(0, serde_json::json!({ "role": "system", "content": system }));
+            }
+        }
+        Ok(req)
+    }
+
     fn parse_response(&self, body: &str) -> Result<String, String> {
         let v: serde_json::Value =
             serde_json::from_str(body).map_err(|e| format!("Unexpected response: {e}"))?;
@@ -98,5 +114,31 @@ mod tests {
     fn unexpected_response_shape_is_a_readable_error() {
         assert!(OpenAiCompatible.parse_response("{}").is_err());
         assert!(OpenAiCompatible.parse_response("not json").is_err());
+    }
+
+    #[test]
+    fn system_message_prepended_only_when_set() {
+        let c = cfg("", "");
+        let off = OpenAiCompatible
+            .build_request_with(&c, None, "Hi", super::super::RequestOptions::default())
+            .unwrap();
+        let plain = OpenAiCompatible.build_request(&c, None, "Hi").unwrap();
+        assert_eq!(off.body, plain.body, "no system prompt must leave the body identical");
+
+        let on = OpenAiCompatible
+            .build_request_with(
+                &c,
+                None,
+                "Hi",
+                super::super::RequestOptions {
+                    system: Some("Be brief.\nUse Markdown.".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(on.body["messages"][0]["role"], "system");
+        assert_eq!(on.body["messages"][0]["content"], "Be brief.\nUse Markdown.");
+        assert_eq!(on.body["messages"][1]["role"], "user");
+        assert_eq!(on.body["messages"][1]["content"], "Hi");
     }
 }

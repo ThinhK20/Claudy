@@ -34,6 +34,22 @@ impl AiProvider for Ollama {
         })
     }
 
+    fn build_request_with(
+        &self,
+        cfg: &ProviderSettings,
+        api_key: Option<&str>,
+        prompt: &str,
+        opts: super::RequestOptions,
+    ) -> Result<HttpRequest, String> {
+        let mut req = self.build_request(cfg, api_key, prompt)?;
+        if let Some(system) = super::non_empty_system(&opts) {
+            if let Some(messages) = req.body["messages"].as_array_mut() {
+                messages.insert(0, serde_json::json!({ "role": "system", "content": system }));
+            }
+        }
+        Ok(req)
+    }
+
     fn parse_response(&self, body: &str) -> Result<String, String> {
         let v: serde_json::Value =
             serde_json::from_str(body).map_err(|e| format!("Unexpected response: {e}"))?;
@@ -72,5 +88,32 @@ mod tests {
         let body = r#"{"message":{"role":"assistant","content":" Hello "},"done":true}"#;
         assert_eq!(Ollama.parse_response(body).unwrap(), "Hello");
         assert!(Ollama.parse_response("{}").is_err());
+    }
+
+    #[test]
+    fn system_message_prepended_only_when_set() {
+        let cfg = ProviderSettings::default();
+        let off = Ollama
+            .build_request_with(&cfg, None, "Hi", super::super::RequestOptions::default())
+            .unwrap();
+        let plain = Ollama.build_request(&cfg, None, "Hi").unwrap();
+        assert_eq!(off.body, plain.body, "no system prompt must leave the body identical");
+
+        let on = Ollama
+            .build_request_with(
+                &cfg,
+                None,
+                "Hi",
+                super::super::RequestOptions {
+                    system: Some("Be brief.".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(on.body["messages"][0]["role"], "system");
+        assert_eq!(on.body["messages"][0]["content"], "Be brief.");
+        assert_eq!(on.body["messages"][1]["role"], "user");
+        assert_eq!(on.body["messages"][1]["content"], "Hi");
+        assert_eq!(on.body["stream"], false, "stream flag untouched");
     }
 }

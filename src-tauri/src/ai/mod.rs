@@ -13,12 +13,21 @@ pub struct HttpRequest {
     pub body: serde_json::Value,
 }
 
-/// Per-request switches that aren't part of the stored provider config. v1
-/// carries only web search; kept as a struct so new switches don't churn
-/// every call site.
-#[derive(Debug, Clone, Copy, Default)]
+/// Per-request switches that aren't part of the stored provider config.
+/// Kept as a struct so new switches don't churn every call site (web search
+/// in v1, the assistant's custom system prompt in Phase 8).
+#[derive(Debug, Clone, Default)]
 pub struct RequestOptions {
     pub web_search: bool,
+    /// System instruction for the request; `None` = provider default shape
+    /// (no system field at all). Set only by the quick-ask assistant path.
+    pub system: Option<String>,
+}
+
+/// Shared trim/filter so each provider injects the system prompt only when
+/// it is set and non-empty.
+pub(crate) fn non_empty_system(opts: &RequestOptions) -> Option<&str> {
+    opts.system.as_deref().map(str::trim).filter(|s| !s.is_empty())
 }
 
 /// Adding a provider = one new file implementing this + one registry line.
@@ -225,11 +234,47 @@ mod tests {
             assert!(!p.supports_web_search(), "{id} should not support web search");
             let plain = p.build_request(&cfg, Some("k"), "Hi").unwrap();
             let with = p
-                .build_request_with(&cfg, Some("k"), "Hi", RequestOptions { web_search: true })
+                .build_request_with(
+                    &cfg,
+                    Some("k"),
+                    "Hi",
+                    RequestOptions { web_search: true, ..Default::default() },
+                )
                 .unwrap();
             assert_eq!(plain.url, with.url, "{id} url changed");
             assert_eq!(plain.body, with.body, "{id} body changed despite no web search");
         }
+    }
+
+    #[test]
+    fn default_options_have_no_system_prompt_so_dictation_flow_is_unchanged() {
+        // `complete()` / `complete_with()` (used by prompt_flow) build
+        // RequestOptions::default() — pin that this means "no system prompt"
+        // and that every provider's request body stays identical to the plain
+        // build_request shape.
+        assert!(RequestOptions::default().system.is_none());
+        let cfg = crate::config::ProviderSettings {
+            base_url: "http://x/v1".into(),
+            model: "m".into(),
+        };
+        for id in crate::config::PROVIDER_IDS {
+            let p = provider(id).unwrap();
+            let plain = p.build_request(&cfg, Some("k"), "Hi").unwrap();
+            let with = p
+                .build_request_with(&cfg, Some("k"), "Hi", RequestOptions::default())
+                .unwrap();
+            assert_eq!(plain.body, with.body, "{id} body changed with default options");
+        }
+    }
+
+    #[test]
+    fn non_empty_system_filters_none_empty_and_whitespace() {
+        let none = RequestOptions::default();
+        assert_eq!(non_empty_system(&none), None);
+        let empty = RequestOptions { system: Some("   ".into()), ..Default::default() };
+        assert_eq!(non_empty_system(&empty), None);
+        let set = RequestOptions { system: Some(" Be brief.\nUse lists. ".into()), ..Default::default() };
+        assert_eq!(non_empty_system(&set), Some("Be brief.\nUse lists."));
     }
 
     #[tokio::test]
