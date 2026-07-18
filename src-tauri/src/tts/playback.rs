@@ -123,6 +123,9 @@ fn run_thread(
             Ok(Cmd::Play { samples, sample_rate }) => {
                 let rate = NonZero::new(sample_rate).unwrap_or(NonZero::new(24_000).unwrap());
                 player.append(SamplesBuffer::new(mono, rate, samples));
+                // `clear()` (used by Stop) leaves the player paused; resume or
+                // every append after the first stop is silent forever.
+                player.play();
                 playing.store(true, Ordering::Relaxed);
             }
             Ok(Cmd::Stop) => {
@@ -136,6 +139,35 @@ fn run_thread(
                 }
             }
             Err(RecvTimeoutError::Disconnected) => break,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression test: rodio's `Player::clear()` pauses the sink, so a stop
+    /// followed by new audio must explicitly resume playback or the player
+    /// stays paused forever (silent, `is_playing()` stuck at true).
+    #[test]
+    fn enqueue_after_stop_still_plays_and_drains() {
+        let playback = Playback::default();
+        let samples = vec![0.0_f32; 4800]; // 0.2 s of silence @ 24 kHz
+        if let Err(e) = playback.enqueue(samples.clone(), 24_000) {
+            eprintln!("skipping: no audio device ({e})");
+            return;
+        }
+        playback.stop();
+        playback.enqueue(samples, 24_000).expect("second enqueue failed");
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while playback.is_playing() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "playback never drained after stop + enqueue: player stuck paused"
+            );
+            std::thread::sleep(Duration::from_millis(50));
         }
     }
 }

@@ -60,6 +60,29 @@ pub fn voice_from_id(id: &str, speed: f32) -> Result<Voice, String> {
 mod tests {
     use super::*;
 
+    /// Opt-in smoke test: synth a short phrase with every catalog voice
+    /// against the real downloaded model (needs assets in ../models). Run:
+    /// cargo test --lib real_synth_every_voice -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore]
+    async fn real_synth_every_voice() {
+        let model = std::path::Path::new("../models/kokoro-v1.0.int8-r2.onnx");
+        let voices = std::path::Path::new("../models/voices-v1.0-r2.bin");
+        assert!(model.is_file() && voices.is_file(), "model assets missing");
+        let engine = KokoroEngine::load(model, voices).await.expect("load failed");
+        for id in super::super::VOICE_IDS {
+            let started = std::time::Instant::now();
+            match engine.synth("Hello there, this is a quick check.", id, 1.0).await {
+                Ok(a) => println!(
+                    "{id}: OK ({} samples, {:?})",
+                    a.samples.len(),
+                    started.elapsed()
+                ),
+                Err(e) => println!("{id}: ERROR: {e}"),
+            }
+        }
+    }
+
     #[test]
     fn every_catalog_voice_maps_to_a_variant() {
         for v in super::super::VOICE_IDS {
