@@ -1,12 +1,18 @@
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { MessageSquareText, Mic, Plug, Settings } from "lucide-react";
+import { MessageSquareText, Mic, Plug, Settings, Sparkles } from "lucide-react";
 
-export type PageKey = "prompts" | "transcription" | "providers" | "settings";
+export type PageKey =
+  | "prompts"
+  | "transcription"
+  | "assistant"
+  | "providers"
+  | "settings";
 
 const NAV: { key: PageKey; label: string; icon: React.ElementType }[] = [
   { key: "prompts", label: "Prompts", icon: MessageSquareText },
   { key: "transcription", label: "Transcription", icon: Mic },
+  { key: "assistant", label: "Assistant", icon: Sparkles },
   { key: "providers", label: "Providers", icon: Plug },
   { key: "settings", label: "Settings", icon: Settings },
 ];

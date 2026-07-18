@@ -14,10 +14,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
-import { Slider } from "@/components/ui/slider";
 import { ShortcutInput } from "@/components/shortcut-input";
-import { VoiceModelManager } from "@/components/assistant/voice-model-manager";
+import { ToggleRow } from "@/components/toggle-row";
 import { useSettings, type Settings } from "@/lib/settings-store";
 
 const THEMES: { value: Settings["theme"]; label: string }[] = [
@@ -25,49 +23,6 @@ const THEMES: { value: Settings["theme"]; label: string }[] = [
   { value: "light", label: "Light" },
   { value: "dark", label: "Dark" },
 ];
-
-const AUTO_CLOSE_OPTIONS: { value: number; label: string }[] = [
-  { value: 0, label: "Never" },
-  { value: 10, label: "10 seconds" },
-  { value: 15, label: "15 seconds" },
-  { value: 30, label: "30 seconds" },
-  { value: 60, label: "60 seconds" },
-];
-
-const VOICE_OPTIONS: { value: string; label: string }[] = [
-  { value: "af_heart", label: "Heart (US, female)" },
-  { value: "af_bella", label: "Bella (US, female)" },
-  { value: "af_nicole", label: "Nicole (US, female)" },
-  { value: "af_sarah", label: "Sarah (US, female)" },
-  { value: "am_adam", label: "Adam (US, male)" },
-  { value: "am_michael", label: "Michael (US, male)" },
-  { value: "am_puck", label: "Puck (US, male)" },
-  { value: "bf_emma", label: "Emma (UK, female)" },
-  { value: "bf_isabella", label: "Isabella (UK, female)" },
-  { value: "bm_george", label: "George (UK, male)" },
-  { value: "bm_lewis", label: "Lewis (UK, male)" },
-];
-
-const SPEED_OPTIONS: number[] = [0.75, 1.0, 1.25, 1.5, 1.75, 2.0];
-
-interface ToggleRowProps {
-  label: string;
-  description: string;
-  checked: boolean;
-  onChange: (checked: boolean) => void;
-}
-
-function ToggleRow({ label, description, checked, onChange }: ToggleRowProps) {
-  return (
-    <div className="flex items-center justify-between gap-4">
-      <div>
-        <Label>{label}</Label>
-        <p className="text-muted-foreground text-sm">{description}</p>
-      </div>
-      <Switch checked={checked} onCheckedChange={onChange} />
-    </div>
-  );
-}
 
 export default function SettingsPage() {
   const settings = useSettings((s) => s.settings);
@@ -117,160 +72,6 @@ export default function SettingsPage() {
             forDictation
             allowClear={false}
           />
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Assistant</CardTitle>
-          <CardDescription>
-            Quick-ask AI popup opened by a global shortcut, with an optional spoken answer.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-5">
-          <div>
-            <Label>Shortcut</Label>
-            <p className="text-muted-foreground mb-2 text-sm">
-              Global combination that opens the ask popup at your cursor.
-            </p>
-            <ShortcutInput
-              value={settings.assistant.shortcut}
-              onChange={(accel) => {
-                if (accel)
-                  void safeUpdate({
-                    assistant: { ...settings.assistant, shortcut: accel },
-                  });
-              }}
-              forAssistant
-              allowClear={false}
-            />
-          </div>
-          <ToggleRow
-            label="Search the web automatically"
-            description="Let supported providers (Anthropic, Gemini) look things up online to answer. Ignored by providers without web search."
-            checked={settings.assistant.autoWebSearch}
-            onChange={(v) =>
-              void safeUpdate({
-                assistant: { ...settings.assistant, autoWebSearch: v },
-              })
-            }
-          />
-          <div className="flex items-center justify-between gap-4">
-            <div>
-              <Label>Auto-close answer</Label>
-              <p className="text-muted-foreground text-sm">
-                Hide the answer panel after this long. Hovering or interacting pauses it.
-              </p>
-            </div>
-            <Select
-              value={String(settings.assistant.panelCloseSecs)}
-              onValueChange={(v) =>
-                void safeUpdate({
-                  assistant: { ...settings.assistant, panelCloseSecs: Number(v) },
-                })
-              }
-            >
-              <SelectTrigger className="w-36">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {AUTO_CLOSE_OPTIONS.map((o) => (
-                  <SelectItem key={o.value} value={String(o.value)}>
-                    {o.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          <ToggleRow
-            label="Speak answers aloud"
-            description="Read the answer out loud using the local voice model."
-            checked={settings.assistant.autoSpeak}
-            onChange={(v) =>
-              void safeUpdate({ assistant: { ...settings.assistant, autoSpeak: v } })
-            }
-          />
-
-          <div className="flex items-center justify-between gap-4">
-            <div>
-              <Label>Voice</Label>
-              <p className="text-muted-foreground text-sm">Which voice reads answers.</p>
-            </div>
-            <Select
-              value={settings.assistant.ttsVoice}
-              onValueChange={(v) =>
-                void safeUpdate({ assistant: { ...settings.assistant, ttsVoice: v } })
-              }
-            >
-              <SelectTrigger className="w-44">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {VOICE_OPTIONS.map((o) => (
-                  <SelectItem key={o.value} value={o.value}>
-                    {o.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div className="flex items-center justify-between gap-4">
-            <div>
-              <Label>Speech speed</Label>
-              <p className="text-muted-foreground text-sm">Playback rate for spoken answers.</p>
-            </div>
-            <Select
-              value={String(settings.assistant.speechSpeed)}
-              onValueChange={(v) =>
-                void safeUpdate({ assistant: { ...settings.assistant, speechSpeed: Number(v) } })
-              }
-            >
-              <SelectTrigger className="w-28">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {SPEED_OPTIONS.map((s) => (
-                  <SelectItem key={s} value={String(s)}>
-                    {s.toFixed(2)}×
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div className="flex items-center justify-between gap-4">
-            <div>
-              <Label>Volume</Label>
-              <p className="text-muted-foreground text-sm">
-                {Math.round(settings.assistant.volume * 100)}%
-              </p>
-            </div>
-            <Slider
-              className="w-44"
-              min={0}
-              max={1}
-              step={0.05}
-              value={[settings.assistant.volume]}
-              onValueChange={([v]) =>
-                void safeUpdate({ assistant: { ...settings.assistant, volume: v } })
-              }
-            />
-          </div>
-
-          <ToggleRow
-            label="Keep panel open while speaking"
-            description="Pause the auto-close timer until the spoken answer finishes."
-            checked={settings.assistant.keepOpenWhileSpeaking}
-            onChange={(v) =>
-              void safeUpdate({
-                assistant: { ...settings.assistant, keepOpenWhileSpeaking: v },
-              })
-            }
-          />
-
-          <VoiceModelManager />
         </CardContent>
       </Card>
 
