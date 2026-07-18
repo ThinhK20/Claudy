@@ -96,7 +96,6 @@ src-tauri/src/      Rust core: audio, stt, models, shortcuts, selection,
 branding/           Logo assets
 docs/BUILDING.md    Platform build instructions
 docs/screenshots/   README screenshots
-docs/superpowers/   Design spec and phase-by-phase implementation plans
 models/             Locally downloaded Whisper models (gitignored)
 ```
 
@@ -110,8 +109,6 @@ models/             Locally downloaded Whisper models (gitignored)
 ## Documentation
 
 - [Building & platform notes](docs/BUILDING.md)
-- [Design spec](docs/superpowers/specs/2026-07-12-claudy-ai-assistant-design.md)
-- Implementation plans: `docs/superpowers/plans/`
 
 ## Acknowledgements
 
