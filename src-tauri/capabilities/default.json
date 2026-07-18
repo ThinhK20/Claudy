@@ -5,6 +5,7 @@
   "windows": ["main", "overlay", "assistant"],
   "permissions": [
     "core:default",
+    "core:window:allow-start-dragging",
     "store:default",
     "notification:default",
     "global-shortcut:allow-register",

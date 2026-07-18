@@ -33,25 +33,33 @@ pub struct TtsAssetSpec {
     pub size: &'static str,
 }
 
-/// Kokoro v1.0 int8 assets (thewh1teagle/kokoro-onnx `model-files-v1.0`).
+/// Kokoro v1.0 int8 assets (mzdk100/kokoro `V1.0` release — the files the
+/// `kokoro-tts` crate is built against: a bincode voices map and an ONNX model
+/// with `tokens`/`style`/`speed` inputs). The `-r2` local filenames force a
+/// re-download for users who fetched the incompatible thewh1teagle assets.
 pub const KOKORO_ASSETS: &[TtsAssetSpec] = &[
     TtsAssetSpec {
         id: "kokoro-model",
-        filename: "kokoro-v1.0.int8.onnx",
-        url: "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.int8.onnx",
+        filename: "kokoro-v1.0.int8-r2.onnx",
+        url: "https://github.com/mzdk100/kokoro/releases/download/V1.0/kokoro-v1.0.int8.onnx",
         sha1: None,
         label: "Kokoro model (int8)",
         size: "88 MB",
     },
     TtsAssetSpec {
         id: "kokoro-voices",
-        filename: "voices-v1.0.bin",
-        url: "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin",
+        filename: "voices-v1.0-r2.bin",
+        url: "https://github.com/mzdk100/kokoro/releases/download/V1.0/voices.bin",
         sha1: None,
         label: "Kokoro voices",
         size: "27 MB",
     },
 ];
+
+/// Local filenames from the old thewh1teagle/kokoro-onnx download, whose
+/// voices format the `kokoro-tts` crate cannot decode. Deleted on sight so the
+/// dead ~115 MB doesn't strand on disk.
+const LEGACY_TTS_FILENAMES: &[&str] = &["kokoro-v1.0.int8.onnx", "voices-v1.0.bin"];
 
 /// Curated English voice ids exposed in Settings. Each maps to a Kokoro
 /// `Voice` variant in [`kokoro::voice_from_id`]; the frontend voice list must
@@ -131,6 +139,12 @@ pub fn chunk_text(text: &str) -> Vec<String> {
     let mut chunks: Vec<String> = Vec::new();
     let mut current = String::new();
     for sentence in split_sentences(text) {
+        // The very first sentence goes out alone so audio starts as early as
+        // possible; later sentences merge up to the cap.
+        if chunks.is_empty() && current.is_empty() {
+            chunks.push(sentence);
+            continue;
+        }
         if current.is_empty() {
             current = sentence;
         } else if current.chars().count() + 1 + sentence.chars().count() <= MAX_CHUNK_CHARS {
@@ -266,9 +280,24 @@ pub struct TtsAssetInfo {
     pub downloaded: bool,
 }
 
+/// Best-effort removal of assets downloaded under the old (incompatible)
+/// filenames, including interrupted `.part` downloads. Errors are ignored —
+/// worst case the dead files linger until the next status check.
+fn cleanup_legacy_assets(app: &AppHandle) {
+    let Ok(settings) = config::load(app) else {
+        return;
+    };
+    let dir = models::resolve_dir(&settings.models_dir_override);
+    for name in LEGACY_TTS_FILENAMES {
+        let _ = std::fs::remove_file(dir.join(name));
+        let _ = std::fs::remove_file(dir.join(format!("{name}.part")));
+    }
+}
+
 /// Status of each TTS asset for the Settings download UI.
 #[tauri::command]
 pub fn tts_model_status(app: AppHandle) -> Result<Vec<TtsAssetInfo>, String> {
+    cleanup_legacy_assets(&app);
     KOKORO_ASSETS
         .iter()
         .map(|a| {
@@ -302,9 +331,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn short_text_is_a_single_chunk() {
-        let chunks = chunk_text("Hello there. How are you?");
-        assert_eq!(chunks, vec!["Hello there. How are you?"]);
+    fn first_sentence_is_its_own_chunk_for_low_latency() {
+        let chunks = chunk_text("Hello there. How are you? I am fine.");
+        assert_eq!(chunks, vec!["Hello there.", "How are you? I am fine."]);
+    }
+
+    #[test]
+    fn single_sentence_is_a_single_chunk() {
+        let chunks = chunk_text("Hello there and welcome.");
+        assert_eq!(chunks, vec!["Hello there and welcome."]);
     }
 
     #[test]
@@ -352,6 +387,22 @@ mod tests {
         for a in KOKORO_ASSETS {
             assert!(a.url.starts_with("https://"), "{} url must be https", a.id);
             assert!(!a.filename.is_empty());
+        }
+    }
+
+    #[test]
+    fn assets_come_from_the_crate_compatible_release() {
+        for a in KOKORO_ASSETS {
+            assert!(
+                a.url.contains("mzdk100/kokoro"),
+                "{} must download from mzdk100/kokoro (kokoro-tts crate format)",
+                a.id
+            );
+            assert!(
+                !LEGACY_TTS_FILENAMES.contains(&a.filename),
+                "{} filename collides with a legacy filename slated for deletion",
+                a.id
+            );
         }
     }
 }

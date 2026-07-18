@@ -53,3 +53,9 @@ tauri-plugin-global-shortcut = "2"
 httpmock = "0.7"
 tokio = { version = "1", features = ["macros", "rt"] }
 
+# Debug-build Kokoro synthesis is minutes-per-sentence without this: the G2P and
+# tensor code in dependencies needs optimization even in dev. Our own crate
+# stays unoptimized for fast incremental builds.
+[profile.dev.package."*"]
+opt-level = 3
+
