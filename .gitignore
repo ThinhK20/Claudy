@@ -1,4 +1,10 @@
 models/
+
+# Local-only working directories (not published).
+# Anchored to the repo root so docs/promo/ (the published video) still ships.
+/promo/
+/docs/superpowers/
+
 # Logs
 logs
 *.log

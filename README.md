@@ -14,6 +14,12 @@ Claudy sits quietly in your system tray. Press a keyboard shortcut in any applic
 
 Built with Tauri 2 and React. Windows-first — macOS and Linux code paths exist but are untested.
 
+## Demo
+
+<video src="https://github.com/ThinhK20/Claudy/raw/main/docs/promo/claudy-promo.mp4" controls muted loop width="100%"></video>
+
+> Video not playing? [Watch it here](https://github.com/ThinhK20/Claudy/raw/main/docs/promo/claudy-promo.mp4).
+
 ## Screenshots
 
 | Prompts | Assistant |
