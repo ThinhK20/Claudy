@@ -16,9 +16,9 @@ Built with Tauri 2 and React. Windows-first — macOS and Linux code paths exist
 
 ## Demo
 
-<video src="https://github.com/ThinhK20/Claudy/raw/main/docs/promo/claudy-promo.mp4" controls muted loop width="100%"></video>
-
-> Video not playing? [Watch it here](https://github.com/ThinhK20/Claudy/raw/main/docs/promo/claudy-promo.mp4).
+<p align="center">
+  <img src="docs/promo/claudy-promo.gif" alt="Claudy demo: voice dictation, AI prompt shortcuts, and the quick-ask assistant" width="100%" />
+</p>
 
 ## Screenshots
 
