@@ -32,6 +32,7 @@ pub(crate) fn non_empty_system(opts: &RequestOptions) -> Option<&str> {
 
 /// Adding a provider = one new file implementing this + one registry line.
 pub trait AiProvider: Sync {
+    #[allow(dead_code)] // part of the provider contract; exercised by registry tests
     fn id(&self) -> &'static str;
     fn requires_api_key(&self) -> bool;
     fn build_request(

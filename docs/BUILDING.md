@@ -47,6 +47,48 @@ The binary is unsigned, so Windows SmartScreen shows an "unrecognized app"
 warning on first run — click "More info" → "Run anyway". Code signing is a
 future enhancement.
 
+`DirectML.dll` is a **load-time import** of `claudy.exe` (provided by ONNX
+Runtime), so it must ship next to the exe or the installed app will not launch.
+It is declared in `src-tauri/tauri.bundle.windows.conf.json`, which is applied
+via `--config` only for Windows *installer* builds — never for `tauri dev`, so
+the dev loop is unaffected.
+
+To build a self-contained installer locally:
+
+1. `cargo build --release --manifest-path src-tauri/Cargo.toml` once — this makes
+   ONNX Runtime download `DirectML.dll` into `src-tauri/target/release/`.
+2. Copy it into place: `src-tauri/target/release/DirectML.dll` →
+   `src-tauri/DirectML.dll`.
+3. `npm run tauri:build:win` (a plain `npm run tauri build` skips the DLL).
+
+CI performs this staging automatically (see below).
+
+## Continuous integration and releases
+
+Two GitHub Actions workflows live in `.github/workflows/`:
+
+- **`ci.yml`** runs on every push/PR to `main`: a frontend type-check + build
+  (`tsc && vite build`) and `cargo clippy`/`cargo test` on Windows and Linux.
+- **`release.yml`** runs when a `v*` tag is pushed (or via manual dispatch). It
+  builds installers for Windows (NSIS `.exe`), macOS (`.dmg`, Apple Silicon and
+  Intel), and Linux (`.deb`, `.AppImage`), then opens a **draft** GitHub Release
+  with the artifacts attached for review before publishing.
+
+The runners install the full build toolchain (Rust, Node, CMake, LLVM/libclang,
+platform libs) so **end users never need any of it** — ONNX Runtime and
+whisper.cpp are statically linked into the executable, and the Windows job stages
+`DirectML.dll` into the installer.
+
+### Cutting a release
+
+1. Bump `version` in both `package.json` and `src-tauri/tauri.conf.json`.
+2. Commit, then tag: `git tag v0.1.1 && git push origin v0.1.1`.
+3. Wait for `release.yml` to finish, review the draft release, and publish it.
+
+macOS and Linux artifacts are unsigned and built from untested code paths — treat
+them as best-effort. `fail-fast: false` means a failure on one platform still
+produces artifacts for the others.
+
 ## Platform limitations
 
 **macOS (untested):**

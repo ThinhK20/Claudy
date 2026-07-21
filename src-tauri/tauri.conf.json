@@ -56,7 +56,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis"],
+    "targets": "all",
     "publisher": "Claudy",
     "copyright": "Copyright © 2026 Claudy",
     "category": "Productivity",
