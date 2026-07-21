@@ -1,5 +1,9 @@
 models/
 
+# DirectML.dll is copied from the ort build cache by CI before bundling
+# (see .github/workflows/release.yml); it is a build artifact, never committed.
+src-tauri/DirectML.dll
+
 # Local-only working directories (not published).
 # Anchored to the repo root so docs/promo/ (the published video) still ships.
 /promo/
