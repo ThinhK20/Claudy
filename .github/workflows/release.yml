@@ -86,6 +86,10 @@ jobs:
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # whisper.cpp (ggml) uses std::filesystem, which Apple marks
+          # unavailable before macOS 10.15. Raise the deployment target above
+          # the cc crate's 10.13 default so the C++ build succeeds.
+          MACOSX_DEPLOYMENT_TARGET: '10.15'
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'Claudy ${{ github.ref_name }}'
