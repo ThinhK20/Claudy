@@ -59,6 +59,9 @@ struct StreamParts {
     sample_rate: u32,
 }
 
+// Device matching is name-based (user-facing selection), so keep DeviceTrait::name
+// even though rodio's cpal re-export marks it deprecated.
+#[allow(deprecated)]
 fn build_stream(device_name: &str) -> Result<StreamParts, String> {
     use cpal::traits::{DeviceTrait, HostTrait};
 
@@ -201,6 +204,7 @@ pub fn stop(state: &AudioState) -> Result<Vec<f32>, String> {
 }
 
 #[tauri::command]
+#[allow(deprecated)] // DeviceTrait::name: devices are identified by name for selection
 pub fn list_audio_devices() -> Result<Vec<String>, String> {
     use cpal::traits::{DeviceTrait, HostTrait};
     let host = cpal::default_host();

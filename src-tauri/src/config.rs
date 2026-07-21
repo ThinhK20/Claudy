@@ -290,8 +290,10 @@ mod tests {
 
     #[test]
     fn system_prompt_trims_ends_but_preserves_interior_line_breaks() {
-        let mut a = AssistantSettings::default();
-        a.custom_system_prompt = "  Answer in Markdown.\n\nBe concise. \n".into();
+        let a = AssistantSettings {
+            custom_system_prompt: "  Answer in Markdown.\n\nBe concise. \n".into(),
+            ..Default::default()
+        };
         assert_eq!(a.system_prompt().unwrap(), "Answer in Markdown.\n\nBe concise.");
     }
 

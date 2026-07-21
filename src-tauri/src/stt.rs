@@ -154,12 +154,14 @@ mod tests {
 
     #[test]
     fn resolve_model_path_requires_the_file_to_exist() {
-        let mut settings = Settings::default();
-        settings.model = "tiny".into();
-        settings.models_dir_override = std::env::temp_dir()
-            .join("claudy-empty-models")
-            .to_string_lossy()
-            .into_owned();
+        let settings = Settings {
+            model: "tiny".into(),
+            models_dir_override: std::env::temp_dir()
+                .join("claudy-empty-models")
+                .to_string_lossy()
+                .into_owned(),
+            ..Default::default()
+        };
         let err = resolve_model_path(&settings).unwrap_err();
         assert!(err.contains("not downloaded"));
     }
