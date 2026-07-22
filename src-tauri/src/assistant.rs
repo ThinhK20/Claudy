@@ -42,6 +42,10 @@ pub struct AssistantState {
     /// blur-dismiss (lib.rs) honors this so picking an image doesn't close
     /// the panel when the dialog steals focus.
     pub dialog_open: AtomicBool,
+    /// Last logical size the user dragged the answer panel to, remembered for
+    /// the rest of the session so follow-up questions reopen at that size.
+    /// `None` until the user resizes; cleared naturally on app restart.
+    pub panel_size: Mutex<Option<(u32, u32)>>,
 }
 
 /// Top-left position for the assistant window, anchored near the cursor and
@@ -131,6 +135,39 @@ fn resize_to(app: &AppHandle, size: (u32, u32)) {
     }
 }
 
+/// The answer-panel size to open at: the user's remembered dragged size, or the
+/// default `PANEL_SIZE` if they haven't resized this session.
+fn remembered_panel_size(app: &AppHandle) -> (u32, u32) {
+    app.state::<AssistantState>()
+        .panel_size
+        .lock()
+        .unwrap()
+        .unwrap_or(PANEL_SIZE)
+}
+
+/// Snapshot the answer panel's current on-screen size (converted to logical px)
+/// so the next answer reopens at it. Called right before we leave the answer
+/// view — a native resize drag doesn't reliably emit a `Resized` event on
+/// Windows, so we read the live window size on demand instead of tracking drags.
+/// No-ops unless we're currently showing an answer, so it never captures the
+/// input/loading size.
+fn capture_panel_size(app: &AppHandle) {
+    let phase = *app.state::<AssistantState>().phase.lock().unwrap();
+    if !matches!(phase, Phase::Answering | Phase::Speaking | Phase::Error) {
+        return;
+    }
+    if let Some(w) = app.get_webview_window(ASSISTANT_LABEL) {
+        if let Ok(size) = w.inner_size() {
+            let scale = w.scale_factor().unwrap_or(1.0);
+            let logical = (
+                (size.width as f64 / scale).round() as u32,
+                (size.height as f64 / scale).round() as u32,
+            );
+            *app.state::<AssistantState>().panel_size.lock().unwrap() = Some(logical);
+        }
+    }
+}
+
 /// THE entry point — global shortcut and the toggle command both call this.
 /// Hidden → show the input popup; visible → close.
 pub fn toggle(app: &AppHandle) {
@@ -216,7 +253,7 @@ pub fn ask(app: &AppHandle, question: String, images: Vec<ai::ImageAttachment>) 
     let generation = bump_generation(app);
     *app.state::<AssistantState>().last_question.lock().unwrap() = Some(question.clone());
     set_phase(app, Phase::Loading);
-    resize_to(app, PANEL_SIZE);
+    resize_to(app, remembered_panel_size(app));
     publish(app, "loading", Some(question.clone()), None, None, None);
 
     // Web search only when the user opted in AND the active provider offers a
@@ -347,6 +384,7 @@ async fn wait_for_drain(app: &AppHandle, generation: u64) {
 
 /// Close the panel: drop stale flows, stop speech, hide, reset to idle.
 pub fn close(app: &AppHandle) {
+    capture_panel_size(app);
     bump_generation(app);
     app.state::<tts::TtsState>().playback.stop();
     if let Some(w) = app.get_webview_window(ASSISTANT_LABEL) {
@@ -385,6 +423,7 @@ pub fn set_assistant_dialog_open(app: AppHandle, open: bool) {
 /// refocusing the textarea.
 #[tauri::command]
 pub fn assistant_new_question(app: AppHandle) -> Result<(), String> {
+    capture_panel_size(&app);
     bump_generation(&app);
     app.state::<tts::TtsState>().playback.stop();
     resize_to(&app, INPUT_SIZE);

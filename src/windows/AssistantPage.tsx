@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Check, Copy, Loader2, Mic, Paperclip, RotateCw, Square, Volume2, X } from "lucide-react";
 import { ThemeProvider } from "@/components/theme-provider";
 import { Button } from "@/components/ui/button";
@@ -386,9 +387,22 @@ function ResponsePanel({
     }
   };
 
+  // Hand a bottom-right corner drag to the OS to resize the window. The dragged
+  // size is remembered in Rust (see lib.rs `Resized` handler) for the session.
+  const startResize = (e: React.MouseEvent) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    void getCurrentWindow().startResizeDragging("SouthEast");
+  };
+
+  // The panel can be dragged larger only once an answer has responded (not while
+  // still "Thinking…"), matching where the remembered-size capture is gated.
+  const canResize = phase === "answering" || phase === "speaking" || phase === "error";
+
   return (
     <div
-      className="bg-popover border-border flex h-full flex-col rounded-xl border shadow-lg"
+      className="bg-popover border-border relative flex h-full flex-col rounded-xl border shadow-lg"
       onMouseEnter={() => setHovering(true)}
       onMouseLeave={() => setHovering(false)}
       onKeyDownCapture={() => setActivity((n) => n + 1)}
@@ -468,6 +482,24 @@ function ResponsePanel({
           Close
         </Button>
       </div>
+
+      {canResize && (
+        <div
+          onMouseDown={startResize}
+          title="Drag to resize"
+          className="text-muted-foreground/50 hover:text-muted-foreground absolute right-0 bottom-0 z-10 flex h-4 w-4 cursor-nwse-resize items-end justify-end p-[3px]"
+        >
+          <svg viewBox="0 0 10 10" className="h-full w-full" aria-hidden="true">
+            <path
+              d="M9 1 L1 9 M9 5 L5 9"
+              stroke="currentColor"
+              strokeWidth="1.25"
+              strokeLinecap="round"
+              fill="none"
+            />
+          </svg>
+        </div>
+      )}
     </div>
   );
 }
