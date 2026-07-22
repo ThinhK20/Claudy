@@ -47,6 +47,11 @@ impl AiProvider for Anthropic {
         true
     }
 
+    /// Every current Claude model accepts image input.
+    fn supports_images(&self, _model: &str) -> bool {
+        true
+    }
+
     fn build_request_with(
         &self,
         cfg: &ProviderSettings,
@@ -55,6 +60,22 @@ impl AiProvider for Anthropic {
         opts: super::RequestOptions,
     ) -> Result<HttpRequest, String> {
         let mut req = self.build_request(cfg, api_key, prompt)?;
+        if !opts.images.is_empty() {
+            // Promote the bare-string user content to a content-block array:
+            // the text first, then one base64 `image` block per attachment.
+            let mut content = vec![serde_json::json!({ "type": "text", "text": prompt })];
+            for img in &opts.images {
+                content.push(serde_json::json!({
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": img.media_type,
+                        "data": img.data,
+                    },
+                }));
+            }
+            req.body["messages"][0]["content"] = serde_json::Value::Array(content);
+        }
         if opts.web_search {
             // Server-side web search tool; Claude runs the searches itself and
             // folds results into the answer. `max_uses` bounds cost/latency.
@@ -193,5 +214,40 @@ mod tests {
     #[test]
     fn supports_web_search_is_advertised() {
         assert!(Anthropic.supports_web_search());
+    }
+
+    #[test]
+    fn supports_images_for_any_model() {
+        assert!(Anthropic.supports_images("claude-sonnet-5"));
+        assert!(Anthropic.supports_images(""));
+    }
+
+    #[test]
+    fn images_become_content_blocks_after_the_text() {
+        let cfg = ProviderSettings::default();
+        let opts = super::super::RequestOptions {
+            images: vec![super::super::ImageAttachment {
+                media_type: "image/png".into(),
+                data: "BASE64DATA".into(),
+            }],
+            ..Default::default()
+        };
+        let req = Anthropic.build_request_with(&cfg, Some("k"), "What is this?", opts).unwrap();
+        let content = &req.body["messages"][0]["content"];
+        assert_eq!(content[0]["type"], "text");
+        assert_eq!(content[0]["text"], "What is this?");
+        assert_eq!(content[1]["type"], "image");
+        assert_eq!(content[1]["source"]["type"], "base64");
+        assert_eq!(content[1]["source"]["media_type"], "image/png");
+        assert_eq!(content[1]["source"]["data"], "BASE64DATA");
+    }
+
+    #[test]
+    fn no_images_keeps_the_bare_string_content() {
+        let cfg = ProviderSettings::default();
+        let with = Anthropic
+            .build_request_with(&cfg, Some("k"), "Hi", super::super::RequestOptions::default())
+            .unwrap();
+        assert_eq!(with.body["messages"][0]["content"], "Hi");
     }
 }

@@ -17,9 +17,31 @@ export interface AssistantState {
   ttsError: string | null;
 }
 
-/** Submit a question; the answer arrives via the `assistant-state` event. */
-export const askAssistant = (question: string): Promise<void> =>
-  invoke("ask_assistant", { question });
+/** One image attached to a question. `data` is base64 without the data-URI
+ * prefix; camelCase matches the Rust `ImageAttachment` deserializer. */
+export interface ImageAttachment {
+  mediaType: string;
+  data: string;
+}
+
+/** Submit a question (optionally with images); the answer arrives via the
+ * `assistant-state` event. */
+export const askAssistant = (
+  question: string,
+  images: ImageAttachment[] = [],
+): Promise<void> => invoke("ask_assistant", { question, images });
+
+/** Whether the active provider + model can accept image attachments. */
+export const activeProviderSupportsImages = (): Promise<boolean> =>
+  invoke("active_provider_supports_images");
+
+/** Grow/shrink the input popup to fit the image-thumbnail row. */
+export const resizeAssistantInput = (hasAttachments: boolean): Promise<void> =>
+  invoke("resize_assistant_input", { hasAttachments });
+
+/** Suppress blur-dismiss while a native file-picker dialog is open. */
+export const setAssistantDialogOpen = (open: boolean): Promise<void> =>
+  invoke("set_assistant_dialog_open", { open });
 
 export const closeAssistant = (): Promise<void> => invoke("close_assistant");
 

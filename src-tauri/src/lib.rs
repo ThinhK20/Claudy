@@ -49,6 +49,7 @@ pub fn run() {
             secrets::has_api_key,
             secrets::delete_api_key,
             ai::test_provider,
+            ai::active_provider_supports_images,
             prompts::list_prompts,
             prompts::save_prompt,
             prompts::delete_prompt,
@@ -75,6 +76,8 @@ pub fn run() {
             dictation::get_dictation_state,
             assistant::ask_assistant,
             assistant::close_assistant,
+            assistant::resize_assistant_input,
+            assistant::set_assistant_dialog_open,
             assistant::assistant_new_question,
             assistant::stop_assistant_speech,
             assistant::replay_assistant_speech,
@@ -99,9 +102,14 @@ pub fn run() {
                     // Blur-dismiss, but only while still typing — losing focus
                     // after an answer is shown must not close the panel.
                     if let tauri::WindowEvent::Focused(false) = event {
+                        use std::sync::atomic::Ordering;
                         let app = window.app_handle();
-                        let phase = *app.state::<assistant::AssistantState>().phase.lock().unwrap();
-                        if phase == assistant::Phase::Input {
+                        let state = app.state::<assistant::AssistantState>();
+                        let phase = *state.phase.lock().unwrap();
+                        // Don't dismiss while a file-picker dialog is open — it
+                        // steals focus but the user is still attaching an image.
+                        let picking = state.dialog_open.load(Ordering::SeqCst);
+                        if phase == assistant::Phase::Input && !picking {
                             assistant::close(app);
                         }
                     }

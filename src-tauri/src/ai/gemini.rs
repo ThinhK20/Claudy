@@ -37,6 +37,11 @@ impl AiProvider for Gemini {
         true
     }
 
+    /// Gemini 1.5+ / 2.x models are natively multimodal.
+    fn supports_images(&self, _model: &str) -> bool {
+        true
+    }
+
     fn build_request_with(
         &self,
         cfg: &ProviderSettings,
@@ -45,6 +50,16 @@ impl AiProvider for Gemini {
         opts: super::RequestOptions,
     ) -> Result<HttpRequest, String> {
         let mut req = self.build_request(cfg, api_key, prompt)?;
+        if !opts.images.is_empty() {
+            // Append one `inline_data` part per attachment after the text part.
+            if let Some(parts) = req.body["contents"][0]["parts"].as_array_mut() {
+                for img in &opts.images {
+                    parts.push(serde_json::json!({
+                        "inline_data": { "mime_type": img.media_type, "data": img.data },
+                    }));
+                }
+            }
+        }
         if opts.web_search {
             // Google Search grounding: Gemini decides when to search and
             // grounds its answer in the results.
@@ -160,5 +175,27 @@ mod tests {
             "Be brief.\nUse Markdown."
         );
         assert_eq!(on.body["contents"][0]["parts"][0]["text"], "Hi", "user prompt untouched");
+    }
+
+    #[test]
+    fn supports_images_is_advertised() {
+        assert!(Gemini.supports_images("gemini-2.5-flash"));
+    }
+
+    #[test]
+    fn images_append_inline_data_parts_after_the_text() {
+        let cfg = ProviderSettings::default();
+        let opts = super::super::RequestOptions {
+            images: vec![super::super::ImageAttachment {
+                media_type: "image/webp".into(),
+                data: "ZZZ".into(),
+            }],
+            ..Default::default()
+        };
+        let req = Gemini.build_request_with(&cfg, Some("k"), "Look", opts).unwrap();
+        let parts = &req.body["contents"][0]["parts"];
+        assert_eq!(parts[0]["text"], "Look");
+        assert_eq!(parts[1]["inline_data"]["mime_type"], "image/webp");
+        assert_eq!(parts[1]["inline_data"]["data"], "ZZZ");
     }
 }

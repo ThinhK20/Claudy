@@ -1,5 +1,5 @@
 use serde::Serialize;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, State};
 
@@ -10,6 +10,9 @@ pub const ASSISTANT_LABEL: &str = "assistant";
 /// Logical window sizes (tauri.conf.json defines the window at INPUT size).
 /// `show_input` scales these to physical pixels via the monitor scale factor.
 const INPUT_SIZE: (u32, u32) = (420, 150);
+/// Taller input popup when image thumbnails are shown, so the row doesn't
+/// crowd the textarea.
+const INPUT_WITH_ATTACHMENTS_SIZE: (u32, u32) = (420, 264);
 const PANEL_SIZE: (u32, u32) = (460, 380);
 /// Logical gap between the cursor and the window's near corner.
 const CURSOR_OFFSET: i32 = 14;
@@ -35,6 +38,10 @@ pub struct AssistantState {
     pub generation: AtomicU64,
     pub last_question: Mutex<Option<String>>,
     pub last_answer: Mutex<Option<String>>,
+    /// True while a native file-picker dialog is open. The Input-phase
+    /// blur-dismiss (lib.rs) honors this so picking an image doesn't close
+    /// the panel when the dialog steals focus.
+    pub dialog_open: AtomicBool,
 }
 
 /// Top-left position for the assistant window, anchored near the cursor and
@@ -165,8 +172,10 @@ pub fn show_input(app: &AppHandle) -> Result<(), String> {
         (CURSOR_OFFSET as f64 * scale).round() as i32,
     );
 
-    // Opening a fresh input drops any stale in-flight question/answer.
+    // Opening a fresh input drops any stale in-flight question/answer, and
+    // clears any lingering file-dialog flag from a prior session.
     bump_generation(app);
+    app.state::<AssistantState>().dialog_open.store(false, Ordering::SeqCst);
     w.set_size(PhysicalSize::new(win.0, win.1))
         .map_err(|e| e.to_string())?;
     w.set_position(PhysicalPosition::new(x, y))
@@ -180,9 +189,28 @@ pub fn show_input(app: &AppHandle) -> Result<(), String> {
 
 /// Ask the AI. Publishes `loading`, then `answering`/`error`. A newer question
 /// (or a close) bumps the generation and this flow's result is discarded.
-pub fn ask(app: &AppHandle, question: String) {
+pub fn ask(app: &AppHandle, question: String, images: Vec<ai::ImageAttachment>) {
     let question = question.trim().to_string();
-    if question.is_empty() {
+    if question.is_empty() && images.is_empty() {
+        return;
+    }
+    // Backstop the frontend's warn-and-block: never ship images to a model that
+    // can't read them (bump generation so any in-flight flow is superseded).
+    if !images.is_empty() && !ai::active_provider_supports_images(app.clone()).unwrap_or(false) {
+        bump_generation(app);
+        set_phase(app, Phase::Error);
+        publish(
+            app,
+            "error",
+            Some(question),
+            None,
+            Some(
+                "The current model can't read images — remove them or switch to a \
+                 vision-capable provider in Settings."
+                    .to_string(),
+            ),
+            None,
+        );
         return;
     }
     let generation = bump_generation(app);
@@ -202,7 +230,7 @@ pub fn ask(app: &AppHandle, question: String) {
     // Custom system prompt (None when unset) — assistant path only; the
     // dictation flow builds default options and stays system-free.
     let system = settings.as_ref().and_then(|s| s.assistant.system_prompt());
-    let opts = ai::RequestOptions { web_search, system };
+    let opts = ai::RequestOptions { web_search, system, images };
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let result = ai::complete_with_options(&app, &question, opts).await;
@@ -329,13 +357,28 @@ pub fn close(app: &AppHandle) {
 }
 
 #[tauri::command]
-pub fn ask_assistant(app: AppHandle, question: String) {
-    ask(&app, question);
+pub fn ask_assistant(app: AppHandle, question: String, images: Vec<ai::ImageAttachment>) {
+    ask(&app, question, images);
 }
 
 #[tauri::command]
 pub fn close_assistant(app: AppHandle) {
     close(&app);
+}
+
+/// Grow/shrink the input popup to fit the image-thumbnail row. The frontend
+/// calls this when the attachment count crosses zero.
+#[tauri::command]
+pub fn resize_assistant_input(app: AppHandle, has_attachments: bool) {
+    let size = if has_attachments { INPUT_WITH_ATTACHMENTS_SIZE } else { INPUT_SIZE };
+    resize_to(&app, size);
+}
+
+/// Toggle the flag that suppresses the Input-phase blur-dismiss while a native
+/// file-picker dialog is open.
+#[tauri::command]
+pub fn set_assistant_dialog_open(app: AppHandle, open: bool) {
+    app.state::<AssistantState>().dialog_open.store(open, Ordering::SeqCst);
 }
 
 /// Return to the input phase for a follow-up question, resizing back down and

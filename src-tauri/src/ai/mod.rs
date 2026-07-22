@@ -13,15 +13,28 @@ pub struct HttpRequest {
     pub body: serde_json::Value,
 }
 
+/// One image attached to a prompt. `data` is standard base64 (no data-URI
+/// prefix); `media_type` is the MIME string (e.g. "image/png"). Deserialized
+/// straight from the `ask_assistant` command payload, hence camelCase.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageAttachment {
+    pub media_type: String,
+    pub data: String,
+}
+
 /// Per-request switches that aren't part of the stored provider config.
 /// Kept as a struct so new switches don't churn every call site (web search
-/// in v1, the assistant's custom system prompt in Phase 8).
+/// in v1, the assistant's custom system prompt in Phase 8, images in Phase 9).
 #[derive(Debug, Clone, Default)]
 pub struct RequestOptions {
     pub web_search: bool,
     /// System instruction for the request; `None` = provider default shape
     /// (no system field at all). Set only by the quick-ask assistant path.
     pub system: Option<String>,
+    /// Images to send alongside the prompt. Empty = text-only (every existing
+    /// caller), so providers keep their bare-string content unchanged.
+    pub images: Vec<ImageAttachment>,
 }
 
 /// Shared trim/filter so each provider injects the system prompt only when
@@ -48,6 +61,13 @@ pub trait AiProvider: Sync {
     /// provider in Phase 2; defaults to false so ollama/openai_compatible
     /// silently no-op.
     fn supports_web_search(&self) -> bool {
+        false
+    }
+
+    /// Can this provider's configured `model` accept image input? Defaults to
+    /// false; cloud providers override to true, ollama uses a model-name
+    /// heuristic. Drives the assistant's warn-and-block guard for attachments.
+    fn supports_images(&self, _model: &str) -> bool {
         false
     }
 
@@ -188,6 +208,18 @@ pub fn active_provider_supports_web_search(app: &AppHandle) -> Result<bool, Stri
     Ok(provider(&id)?.supports_web_search())
 }
 
+/// Whether the ACTIVE provider + its configured model can accept images. The
+/// quick-ask box calls this to gate image attachments (warn-and-block) and the
+/// `ask` flow uses it as a backstop before sending. Empty model = provider
+/// default, which each `supports_images` impl resolves on its own.
+#[tauri::command]
+pub fn active_provider_supports_images(app: AppHandle) -> Result<bool, String> {
+    let settings = crate::config::load(&app)?;
+    let id = &settings.ai.active_provider;
+    let model = settings.ai.provider(id)?.model.clone();
+    Ok(provider(id)?.supports_images(&model))
+}
+
 /// Connection test for the Providers page: cheapest possible round trip
 /// that proves endpoint + key + model all work.
 #[tauri::command]
@@ -254,6 +286,7 @@ mod tests {
         // and that every provider's request body stays identical to the plain
         // build_request shape.
         assert!(RequestOptions::default().system.is_none());
+        assert!(RequestOptions::default().images.is_empty());
         let cfg = crate::config::ProviderSettings {
             base_url: "http://x/v1".into(),
             model: "m".into(),

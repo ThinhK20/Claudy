@@ -47,7 +47,8 @@
         "decorations": false,
         "resizable": false,
         "shadow": false,
-        "focus": false
+        "focus": false,
+        "dragDropEnabled": false
       }
     ],
     "security": {

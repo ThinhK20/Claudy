@@ -2,20 +2,28 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
-import { Check, Copy, Loader2, RotateCw, Square, Volume2, X } from "lucide-react";
+import { Check, Copy, Loader2, Paperclip, RotateCw, Square, Volume2, X } from "lucide-react";
 import { ThemeProvider } from "@/components/theme-provider";
 import { Button } from "@/components/ui/button";
 import { useSettings } from "@/lib/settings-store";
 import {
+  activeProviderSupportsImages,
   askAssistant,
   assistantNewQuestion,
   closeAssistant,
   getAssistantPhase,
   onAssistantState,
   replayAssistantSpeech,
+  resizeAssistantInput,
+  setAssistantDialogOpen,
   stopAssistantSpeech,
   type AssistantPhase,
 } from "@/lib/assistant-api";
+import {
+  fileToAttachment,
+  imageFilesOnly,
+  type Attachment,
+} from "@/lib/image-attach";
 
 export default function AssistantPage() {
   return (
@@ -38,8 +46,14 @@ function AssistantPanel() {
   const [message, setMessage] = useState<string | null>(null);
   const [ttsError, setTtsError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [supportsImages, setSupportsImages] = useState(true);
 
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const hasAttachments = attachments.length > 0;
+  const imagesBlocked = hasAttachments && !supportsImages;
 
   useEffect(() => {
     load().catch(() => {});
@@ -50,7 +64,11 @@ function AssistantPanel() {
       if (s.answer !== null) setAnswer(s.answer);
       setMessage(s.message);
       setTtsError(s.ttsError);
-      if (s.phase === "input") setDraft("");
+      // A fresh input drops the previous question's draft and attachments.
+      if (s.phase === "input") {
+        setDraft("");
+        setAttachments([]);
+      }
     });
     return () => {
       un.then((f) => f());
@@ -58,22 +76,95 @@ function AssistantPanel() {
   }, [load]);
 
   // WebView2 doesn't always honor focus on a freshly shown window; retry on
-  // the next frame after entering the input phase. Also re-load settings on
-  // each open — this window outlives Settings-page changes made in main.
+  // the next frame after entering the input phase. Also re-load settings and
+  // re-check image support on each open — this window outlives Settings-page
+  // changes made in main.
   useEffect(() => {
     if (phase !== "input") return;
     load().catch(() => {});
+    activeProviderSupportsImages()
+      .then(setSupportsImages)
+      .catch(() => setSupportsImages(true));
     const focus = () => textareaRef.current?.focus();
     focus();
     const raf = requestAnimationFrame(focus);
     return () => cancelAnimationFrame(raf);
   }, [phase, load]);
 
+  // Grow the popup to fit the thumbnail row, shrink back when it's empty.
+  useEffect(() => {
+    if (phase !== "input") return;
+    void resizeAssistantInput(hasAttachments);
+  }, [phase, hasAttachments]);
+
+  const addFiles = useCallback(async (files: File[]) => {
+    const images = imageFilesOnly(files);
+    if (images.length === 0) return;
+    try {
+      const added = await Promise.all(images.map(fileToAttachment));
+      setAttachments((prev) => [...prev, ...added]);
+    } catch {
+      // A single unreadable file shouldn't wipe the box; ignore it.
+    }
+  }, []);
+
+  const removeAttachment = useCallback((id: string) => {
+    setAttachments((prev) => prev.filter((a) => a.id !== id));
+  }, []);
+
+  const onPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const files = Array.from(e.clipboardData.items)
+      .filter((it) => it.kind === "file" && it.type.startsWith("image/"))
+      .map((it) => it.getAsFile())
+      .filter((f): f is File => f !== null);
+    if (files.length > 0) {
+      e.preventDefault();
+      void addFiles(files);
+    }
+  };
+
+  const onDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    if (e.dataTransfer.files.length === 0) return;
+    e.preventDefault();
+    void addFiles(Array.from(e.dataTransfer.files));
+  };
+
+  const onDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+    if (Array.from(e.dataTransfer.items).some((it) => it.kind === "file")) {
+      e.preventDefault();
+    }
+  };
+
+  const onFilePicked = (e: React.ChangeEvent<HTMLInputElement>) => {
+    void addFiles(e.target.files ? Array.from(e.target.files) : []);
+    e.target.value = ""; // let the same file be picked again
+  };
+
+  // Open the native picker. The dialog steals focus, which would otherwise
+  // trigger the Input-phase blur-dismiss, so we flag it in the backend first.
+  // When the dialog closes (pick OR cancel) the window regains focus — that's a
+  // reliable signal to clear the flag regardless of picker cancel-event support.
+  const openPicker = useCallback(() => {
+    void setAssistantDialogOpen(true);
+    const clear = () => {
+      void setAssistantDialogOpen(false);
+      window.removeEventListener("focus", clear);
+    };
+    window.addEventListener("focus", clear);
+    fileInputRef.current?.click();
+  }, []);
+
+  const canSend = (draft.trim().length > 0 || hasAttachments) && !imagesBlocked;
+
   const submit = useCallback(() => {
     const q = draft.trim();
-    if (!q) return;
-    void askAssistant(q);
-  }, [draft]);
+    if (!q && attachments.length === 0) return;
+    if (attachments.length > 0 && !supportsImages) return;
+    void askAssistant(
+      q,
+      attachments.map((a) => ({ mediaType: a.mediaType, data: a.data })),
+    );
+  }, [draft, attachments, supportsImages]);
 
   const onInputKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Escape") {
@@ -92,23 +183,65 @@ function AssistantPanel() {
       {phase === "input" && (
         <div
           data-tauri-drag-region
+          onDrop={onDrop}
+          onDragOver={onDragOver}
           className="bg-popover border-border flex h-full flex-col gap-2 rounded-xl border p-3 shadow-lg"
         >
+          {hasAttachments && (
+            <div className="flex flex-wrap gap-2">
+              {attachments.map((a) => (
+                <div key={a.id} className="relative">
+                  <img
+                    src={a.previewUrl}
+                    alt="Attached image"
+                    className="border-border h-16 w-16 rounded-md border object-cover"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => removeAttachment(a.id)}
+                    aria-label="Remove image"
+                    className="bg-background border-border text-foreground absolute -top-1.5 -right-1.5 rounded-full border p-0.5 shadow"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
           <textarea
             ref={textareaRef}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={onInputKeyDown}
-            placeholder="Ask anything…"
+            onPaste={onPaste}
+            placeholder="Ask anything… paste or drop an image"
             className="placeholder:text-muted-foreground flex-1 resize-none bg-transparent text-sm outline-none"
           />
-          <div className="text-muted-foreground flex items-center justify-between text-xs">
+          {imagesBlocked && (
+            <p className="text-destructive text-xs">
+              The current model can't read images — remove them or switch provider in Settings.
+            </p>
+          )}
+          <div className="text-muted-foreground flex items-center justify-between gap-2 text-xs">
             <span data-tauri-drag-region className="select-none">
               Enter to send · Shift+Enter for a new line · Esc to close
             </span>
-            <Button size="sm" onClick={submit} disabled={!draft.trim()}>
-              Ask
-            </Button>
+            <div className="flex items-center gap-1">
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                multiple
+                hidden
+                onChange={onFilePicked}
+              />
+              <Button size="sm" variant="ghost" aria-label="Attach image" onClick={openPicker}>
+                <Paperclip className="h-4 w-4" />
+              </Button>
+              <Button size="sm" onClick={submit} disabled={!canSend}>
+                Ask
+              </Button>
+            </div>
           </div>
         </div>
       )}

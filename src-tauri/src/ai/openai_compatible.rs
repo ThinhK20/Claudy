@@ -40,6 +40,14 @@ impl AiProvider for OpenAiCompatible {
         })
     }
 
+    /// OpenAI chat models take images via `image_url` parts; the default
+    /// `gpt-4o-mini` is vision-capable. This provider also fronts arbitrary
+    /// OpenAI-compatible gateways, so we optimistically allow images and let a
+    /// non-vision endpoint surface its own error.
+    fn supports_images(&self, _model: &str) -> bool {
+        true
+    }
+
     fn build_request_with(
         &self,
         cfg: &ProviderSettings,
@@ -48,6 +56,19 @@ impl AiProvider for OpenAiCompatible {
         opts: super::RequestOptions,
     ) -> Result<HttpRequest, String> {
         let mut req = self.build_request(cfg, api_key, prompt)?;
+        if !opts.images.is_empty() {
+            // Rewrite the user message content as a parts array: text, then one
+            // `image_url` part per attachment using an inline data URL. Done
+            // before the system insert so the user message stays at index 0.
+            let mut content = vec![serde_json::json!({ "type": "text", "text": prompt })];
+            for img in &opts.images {
+                content.push(serde_json::json!({
+                    "type": "image_url",
+                    "image_url": { "url": format!("data:{};base64,{}", img.media_type, img.data) },
+                }));
+            }
+            req.body["messages"][0]["content"] = serde_json::Value::Array(content);
+        }
         if let Some(system) = super::non_empty_system(&opts) {
             if let Some(messages) = req.body["messages"].as_array_mut() {
                 messages.insert(0, serde_json::json!({ "role": "system", "content": system }));
@@ -140,5 +161,44 @@ mod tests {
         assert_eq!(on.body["messages"][0]["content"], "Be brief.\nUse Markdown.");
         assert_eq!(on.body["messages"][1]["role"], "user");
         assert_eq!(on.body["messages"][1]["content"], "Hi");
+    }
+
+    #[test]
+    fn supports_images_is_advertised() {
+        assert!(OpenAiCompatible.supports_images("gpt-4o-mini"));
+    }
+
+    #[test]
+    fn images_become_image_url_parts_with_a_data_url() {
+        let opts = super::super::RequestOptions {
+            images: vec![super::super::ImageAttachment {
+                media_type: "image/jpeg".into(),
+                data: "ABC123".into(),
+            }],
+            ..Default::default()
+        };
+        let req = OpenAiCompatible.build_request_with(&cfg("", ""), None, "Read this", opts).unwrap();
+        let content = &req.body["messages"][0]["content"];
+        assert_eq!(content[0]["type"], "text");
+        assert_eq!(content[0]["text"], "Read this");
+        assert_eq!(content[1]["type"], "image_url");
+        assert_eq!(content[1]["image_url"]["url"], "data:image/jpeg;base64,ABC123");
+    }
+
+    #[test]
+    fn image_content_survives_a_prepended_system_message() {
+        let opts = super::super::RequestOptions {
+            system: Some("Be brief.".into()),
+            images: vec![super::super::ImageAttachment {
+                media_type: "image/png".into(),
+                data: "X".into(),
+            }],
+            ..Default::default()
+        };
+        let req = OpenAiCompatible.build_request_with(&cfg("", ""), None, "Hi", opts).unwrap();
+        assert_eq!(req.body["messages"][0]["role"], "system");
+        assert_eq!(req.body["messages"][1]["role"], "user");
+        assert_eq!(req.body["messages"][1]["content"][0]["text"], "Hi");
+        assert_eq!(req.body["messages"][1]["content"][1]["type"], "image_url");
     }
 }

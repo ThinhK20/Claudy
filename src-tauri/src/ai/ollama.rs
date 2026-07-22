@@ -34,6 +34,18 @@ impl AiProvider for Ollama {
         })
     }
 
+    /// Ollama vision support is per-model. The default `llama3.2` is text-only,
+    /// so we allow images only when the model name carries a known vision tag.
+    /// Conservative by design: the assistant blocks attachments otherwise.
+    fn supports_images(&self, model: &str) -> bool {
+        const VISION_TAGS: [&str; 9] = [
+            "llava", "vision", "bakllava", "moondream", "minicpm-v", "llama3.2-vision",
+            "qwen2-vl", "qwen2.5vl", "gemma3",
+        ];
+        let m = model.to_ascii_lowercase();
+        VISION_TAGS.iter().any(|tag| m.contains(tag))
+    }
+
     fn build_request_with(
         &self,
         cfg: &ProviderSettings,
@@ -42,6 +54,16 @@ impl AiProvider for Ollama {
         opts: super::RequestOptions,
     ) -> Result<HttpRequest, String> {
         let mut req = self.build_request(cfg, api_key, prompt)?;
+        if !opts.images.is_empty() {
+            // Ollama takes images as a message-level array of bare base64
+            // strings (no data-URI prefix); the text content stays a string.
+            let imgs: Vec<serde_json::Value> = opts
+                .images
+                .iter()
+                .map(|i| serde_json::Value::String(i.data.clone()))
+                .collect();
+            req.body["messages"][0]["images"] = serde_json::Value::Array(imgs);
+        }
         if let Some(system) = super::non_empty_system(&opts) {
             if let Some(messages) = req.body["messages"].as_array_mut() {
                 messages.insert(0, serde_json::json!({ "role": "system", "content": system }));
@@ -115,5 +137,29 @@ mod tests {
         assert_eq!(on.body["messages"][1]["role"], "user");
         assert_eq!(on.body["messages"][1]["content"], "Hi");
         assert_eq!(on.body["stream"], false, "stream flag untouched");
+    }
+
+    #[test]
+    fn supports_images_only_for_known_vision_models() {
+        assert!(!Ollama.supports_images("llama3.2"));
+        assert!(!Ollama.supports_images(""));
+        assert!(Ollama.supports_images("llava"));
+        assert!(Ollama.supports_images("llama3.2-vision"));
+        assert!(Ollama.supports_images("qwen2.5vl:7b"));
+    }
+
+    #[test]
+    fn images_attach_as_bare_base64_on_the_user_message() {
+        let cfg = ProviderSettings::default();
+        let opts = super::super::RequestOptions {
+            images: vec![super::super::ImageAttachment {
+                media_type: "image/png".into(),
+                data: "RAWB64".into(),
+            }],
+            ..Default::default()
+        };
+        let req = Ollama.build_request_with(&cfg, None, "Hi", opts).unwrap();
+        assert_eq!(req.body["messages"][0]["content"], "Hi", "content stays a string");
+        assert_eq!(req.body["messages"][0]["images"][0], "RAWB64");
     }
 }
