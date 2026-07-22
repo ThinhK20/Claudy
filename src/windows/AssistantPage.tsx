@@ -2,10 +2,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
-import { Check, Copy, Loader2, Paperclip, RotateCw, Square, Volume2, X } from "lucide-react";
+import { Check, Copy, Loader2, Mic, Paperclip, RotateCw, Square, Volume2, X } from "lucide-react";
 import { ThemeProvider } from "@/components/theme-provider";
 import { Button } from "@/components/ui/button";
+import { LevelBars } from "@/components/transcription/level-bars";
 import { useSettings } from "@/lib/settings-store";
+import { insertAtCursor } from "@/lib/insert-at-cursor";
+import { useMicTranscription } from "@/lib/use-mic-transcription";
 import {
   activeProviderSupportsImages,
   askAssistant,
@@ -39,6 +42,8 @@ function AssistantPanel() {
   const keepOpenWhileSpeaking = useSettings(
     (s) => s.settings?.assistant.keepOpenWhileSpeaking ?? true,
   );
+  const micDevice = useSettings((s) => s.settings?.micDevice ?? "");
+  const hasSttModel = useSettings((s) => Boolean(s.settings?.model));
 
   const [phase, setPhase] = useState<AssistantPhase>("input");
   const [question, setQuestion] = useState("");
@@ -154,6 +159,32 @@ function AssistantPanel() {
     fileInputRef.current?.click();
   }, []);
 
+  // Drop transcribed speech in at the caret and keep focus for editing — we
+  // fill the box rather than auto-sending so a misheard word can be fixed.
+  const insertTranscript = useCallback(
+    (text: string) => {
+      const el = textareaRef.current;
+      const start = el?.selectionStart ?? draft.length;
+      const end = el?.selectionEnd ?? draft.length;
+      const next = insertAtCursor(draft, text, start, end);
+      setDraft(next.text);
+      requestAnimationFrame(() => {
+        const node = textareaRef.current;
+        if (!node) return;
+        node.focus();
+        node.setSelectionRange(next.caret, next.caret);
+      });
+    },
+    [draft],
+  );
+
+  const mic = useMicTranscription({ device: micDevice, onText: insertTranscript });
+
+  // Never leave the mic recording once we leave the input phase (submit/close).
+  useEffect(() => {
+    if (phase !== "input") mic.cancel();
+  }, [phase, mic.cancel]);
+
   const canSend = (draft.trim().length > 0 || hasAttachments) && !imagesBlocked;
 
   const submit = useCallback(() => {
@@ -169,6 +200,7 @@ function AssistantPanel() {
   const onInputKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Escape") {
       e.preventDefault();
+      mic.cancel();
       void closeAssistant();
       return;
     }
@@ -222,6 +254,7 @@ function AssistantPanel() {
               The current model can't read images — remove them or switch provider in Settings.
             </p>
           )}
+          {mic.error && <p className="text-destructive text-xs">{mic.error}</p>}
           <div className="text-muted-foreground flex items-center justify-between gap-2 text-xs">
             <span data-tauri-drag-region className="select-none">
               Enter to send · Shift+Enter for a new line · Esc to close
@@ -235,6 +268,27 @@ function AssistantPanel() {
                 hidden
                 onChange={onFilePicked}
               />
+              <Button
+                size="sm"
+                variant={mic.state === "recording" ? "destructive" : "ghost"}
+                aria-label={
+                  !hasSttModel
+                    ? "Select a speech model in Settings to use voice"
+                    : mic.state === "recording"
+                      ? "Stop recording"
+                      : "Record voice prompt"
+                }
+                disabled={!hasSttModel || mic.state === "transcribing"}
+                onClick={mic.toggle}
+              >
+                {mic.state === "transcribing" ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : mic.state === "recording" ? (
+                  <LevelBars level={mic.level} />
+                ) : (
+                  <Mic className="h-4 w-4" />
+                )}
+              </Button>
               <Button size="sm" variant="ghost" aria-label="Attach image" onClick={openPicker}>
                 <Paperclip className="h-4 w-4" />
               </Button>

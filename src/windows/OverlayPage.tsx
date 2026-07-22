@@ -6,8 +6,7 @@ import {
   type DictationPhase,
 } from "@/lib/dictation-api";
 import { onMicLevel } from "@/lib/stt-api";
-
-const LEVEL_BARS = 5;
+import { LevelBars } from "@/components/transcription/level-bars";
 
 export default function OverlayPage() {
   const [phase, setPhase] = useState<DictationPhase>("idle");
@@ -49,26 +48,6 @@ export default function OverlayPage() {
         )}
         {phase === "idle" && <span className="opacity-60">Ready</span>}
       </div>
-    </div>
-  );
-}
-
-interface LevelBarsProps {
-  level: number;
-}
-
-function LevelBars({ level }: LevelBarsProps) {
-  // RMS levels for speech are small; scale up so normal speech lights bars.
-  const active = Math.min(LEVEL_BARS, Math.round(level * LEVEL_BARS * 4));
-  return (
-    <div className="flex items-end gap-0.5">
-      {Array.from({ length: LEVEL_BARS }, (_, i) => (
-        <span
-          key={i}
-          className={`w-1 rounded-sm ${i < active ? "bg-green-400" : "bg-white/25"}`}
-          style={{ height: `${6 + i * 2}px` }}
-        />
-      ))}
     </div>
   );
 }
