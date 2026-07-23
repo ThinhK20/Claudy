@@ -70,9 +70,9 @@ Two GitHub Actions workflows live in `.github/workflows/`:
 - **`ci.yml`** runs on every push/PR to `main`: a frontend type-check + build
   (`tsc && vite build`) and `cargo clippy`/`cargo test` on Windows and Linux.
 - **`release.yml`** runs when a `v*` tag is pushed (or via manual dispatch). It
-  builds installers for Windows (NSIS `.exe`), macOS (`.dmg`, Apple Silicon and
-  Intel), and Linux (`.deb`, `.AppImage`), then opens a **draft** GitHub Release
-  with the artifacts attached for review before publishing.
+  builds installers for Windows (NSIS `.exe`) and Linux (`.deb`, `.AppImage`),
+  then opens a **draft** GitHub Release with the artifacts attached for review
+  before publishing.
 
 The runners install the full build toolchain (Rust, Node, CMake, LLVM/libclang,
 platform libs) so **end users never need any of it** — ONNX Runtime and
@@ -85,9 +85,14 @@ whisper.cpp are statically linked into the executable, and the Windows job stage
 2. Commit, then tag: `git tag v0.1.1 && git push origin v0.1.1`.
 3. Wait for `release.yml` to finish, review the draft release, and publish it.
 
-macOS and Linux artifacts are unsigned and built from untested code paths — treat
-them as best-effort. `fail-fast: false` means a failure on one platform still
-produces artifacts for the others.
+Linux artifacts are unsigned and built from untested code paths — treat them as
+best-effort. `fail-fast: false` means a failure on one platform still produces
+artifacts for the others.
+
+**macOS is not built by the release workflow.** The macOS code paths have never
+been verified on hardware, so no `.dmg` is published; build from source using the
+macOS prerequisites above. Adding macOS back to the release matrix is planned for
+the future.
 
 ## Platform limitations
 
