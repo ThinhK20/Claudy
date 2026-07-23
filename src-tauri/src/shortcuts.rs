@@ -18,12 +18,12 @@ pub fn parse(accel: &str) -> Result<Shortcut, String> {
 
 fn on_dictation_shortcut(app: &AppHandle, shortcut: Shortcut) -> Result<(), String> {
     app.global_shortcut()
-        .on_shortcut(shortcut, |app, _shortcut, event| {
-            // Fires for BOTH press and release — without this filter every
-            // press would toggle dictation twice.
-            if event.state == ShortcutState::Pressed {
-                crate::dictation::toggle(app);
-            }
+        .on_shortcut(shortcut, |app, _shortcut, event| match event.state {
+            // Dictation is the one combo that cares about the key coming back
+            // up: hold-to-talk stops on release. The backend registers with
+            // MOD_NOREPEAT, so holding still yields exactly ONE Pressed.
+            ShortcutState::Pressed => crate::dictation::press(app),
+            ShortcutState::Released => crate::dictation::release(app),
         })
         .map_err(|e| e.to_string())
 }

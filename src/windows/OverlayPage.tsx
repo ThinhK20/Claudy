@@ -35,6 +35,9 @@ export default function OverlayPage() {
             <span className="h-2 w-2 animate-pulse rounded-full bg-red-500" />
             <LevelBars level={level} />
             <span>Recording…</span>
+            {/* Set when a tap latched the capture: the key is already back
+                up, so only a second press ends it. */}
+            {message && <span className="opacity-60">{message}</span>}
           </>
         )}
         {phase === "transcribing" && (

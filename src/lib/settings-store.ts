@@ -28,12 +28,16 @@ export interface AssistantSettings {
   customSystemPrompt: string; // "" = no system prompt (default behavior)
 }
 
+/** "hold" = hold to talk, release to transcribe (a quick tap latches it). */
+export type DictationMode = "hold" | "toggle";
+
 export interface Settings {
   theme: "light" | "dark" | "system";
   language: string;
   model: string;
   micDevice: string;
   dictationShortcut: string;
+  dictationMode: DictationMode;
   keepModelWarm: boolean;
   restoreClipboard: boolean;
   autoPaste: boolean;

@@ -103,6 +103,9 @@ pub struct Settings {
     pub model: String,              // model filename, "" = none selected
     pub mic_device: String,         // "" = system default
     pub dictation_shortcut: String, // e.g. "Ctrl+Shift+D"
+    /// Hold-to-talk vs press-to-toggle. Read at press time, so a change
+    /// applies immediately without re-registering the combo.
+    pub dictation_mode: crate::dictation::DictationMode,
     pub keep_model_warm: bool,
     pub restore_clipboard: bool,
     pub auto_paste: bool,
@@ -121,6 +124,7 @@ impl Default for Settings {
             model: String::new(),
             mic_device: String::new(),
             dictation_shortcut: "Ctrl+Shift+D".into(),
+            dictation_mode: crate::dictation::DictationMode::Hold,
             keep_model_warm: true,
             restore_clipboard: true,
             auto_paste: false,
@@ -203,6 +207,36 @@ mod tests {
         assert!(s.restore_clipboard);
         assert_eq!(s.theme, "system");
         assert_eq!(s.dictation_shortcut, "Ctrl+Shift+D");
+        assert_eq!(s.dictation_mode, crate::dictation::DictationMode::Hold);
+    }
+
+    #[test]
+    fn settings_written_before_hold_to_talk_load_into_hold_mode() {
+        // No migration: the field is simply absent in existing settings.json.
+        let json = serde_json::json!({ "dictationShortcut": "Ctrl+Shift+D" });
+        let s: Settings = serde_json::from_value(json).unwrap();
+        assert_eq!(s.dictation_mode, crate::dictation::DictationMode::Hold);
+    }
+
+    #[test]
+    fn dictation_mode_round_trips_camel_case() {
+        let json = serde_json::json!({ "dictationMode": "toggle" });
+        let s: Settings = serde_json::from_value(json).unwrap();
+        assert_eq!(s.dictation_mode, crate::dictation::DictationMode::Toggle);
+        let v = serde_json::to_value(&s).unwrap();
+        assert_eq!(v["dictationMode"], "toggle");
+    }
+
+    #[test]
+    fn an_unusable_dictation_mode_does_not_fail_the_whole_settings_load() {
+        // A hand-edit typo must cost you the mode, not every other setting.
+        for bad in [serde_json::json!("hodl"), serde_json::json!(true)] {
+            let json = serde_json::json!({ "theme": "dark", "dictationMode": bad });
+            let s: Settings = serde_json::from_value(json)
+                .unwrap_or_else(|e| panic!("dictationMode {bad} broke the load: {e}"));
+            assert_eq!(s.dictation_mode, crate::dictation::DictationMode::Hold);
+            assert_eq!(s.theme, "dark", "the rest of the settings must survive");
+        }
     }
 
     #[test]
@@ -219,6 +253,7 @@ mod tests {
         let v = serde_json::to_value(Settings::default()).unwrap();
         assert!(v.get("dictationShortcut").is_some());
         assert!(v.get("dictation_shortcut").is_none());
+        assert!(v.get("dictationMode").is_some());
     }
 
     #[test]

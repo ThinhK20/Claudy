@@ -33,7 +33,8 @@ Built with Tauri 2 and React. Windows-first — macOS and Linux code paths exist
 ## Features
 
 ### Voice dictation
-- Press `Ctrl+Shift+D` (changeable) in any app to start and stop talking; a small on-screen pill shows when you're recording
+- Hold `Ctrl+Shift+D` (changeable) in any app while you talk, release to drop the text where you're typing; a small on-screen pill shows when you're recording
+- Tapped it instead of holding? Recording keeps going until you press again, so nothing is lost. Prefer that every time — switch Activation to "Press to toggle" in Settings
 - Everything happens on your computer (whisper.cpp) — audio is kept in memory only, never saved to disk or sent anywhere
 - Download speech models inside the app, with progress bars and file checks; remove them anytime
 - Choose your microphone and try it out with the built-in test recorder

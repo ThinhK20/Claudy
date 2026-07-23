@@ -24,6 +24,11 @@ const THEMES: { value: Settings["theme"]; label: string }[] = [
   { value: "dark", label: "Dark" },
 ];
 
+const DICTATION_MODES: { value: Settings["dictationMode"]; label: string }[] = [
+  { value: "hold", label: "Hold to talk" },
+  { value: "toggle", label: "Press to toggle" },
+];
+
 export default function SettingsPage() {
   const settings = useSettings((s) => s.settings);
   const update = useSettings((s) => s.update);
@@ -60,10 +65,11 @@ export default function SettingsPage() {
         <CardHeader>
           <CardTitle>Dictation shortcut</CardTitle>
           <CardDescription>
-            Global combination that starts and stops dictation. Applied immediately.
+            Global combination that runs dictation, and how it activates. Applied
+            immediately.
           </CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="flex flex-col gap-5">
           <ShortcutInput
             value={settings.dictationShortcut}
             onChange={(accel) => {
@@ -72,6 +78,33 @@ export default function SettingsPage() {
             forDictation
             allowClear={false}
           />
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <Label>Activation</Label>
+              <p className="text-muted-foreground text-sm">
+                {settings.dictationMode === "hold"
+                  ? "Hold while you talk, release to insert. A quick tap keeps recording until you press again."
+                  : "Press once to start, press again to stop."}
+              </p>
+            </div>
+            <Select
+              value={settings.dictationMode}
+              onValueChange={(v) =>
+                void safeUpdate({ dictationMode: v as Settings["dictationMode"] })
+              }
+            >
+              <SelectTrigger className="w-44">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {DICTATION_MODES.map((m) => (
+                  <SelectItem key={m.value} value={m.value}>
+                    {m.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
         </CardContent>
       </Card>
 
