@@ -17,10 +17,6 @@ jobs:
         include:
           - platform: windows-latest
             args: '--bundles nsis --config src-tauri/tauri.bundle.windows.conf.json'
-          - platform: macos-latest
-            args: '--target aarch64-apple-darwin --bundles app,dmg'
-          - platform: macos-latest
-            args: '--target x86_64-apple-darwin --bundles app,dmg'
           - platform: ubuntu-24.04
             args: '--bundles deb,appimage'
 
@@ -57,8 +53,6 @@ jobs:
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ contains(matrix.platform, 'macos') && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
@@ -86,10 +80,6 @@ jobs:
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # whisper.cpp (ggml) uses std::filesystem, which Apple marks
-          # unavailable before macOS 10.15. Raise the deployment target above
-          # the cc crate's 10.13 default so the C++ build succeeds.
-          MACOSX_DEPLOYMENT_TARGET: '10.15'
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'Claudy ${{ github.ref_name }}'
@@ -97,7 +87,6 @@ jobs:
             Download the installer for your platform below.
 
             - **Windows:** `.exe` (NSIS, per-user install, no admin needed)
-            - **macOS:** `.dmg` (Apple Silicon and Intel builds — unsigned, untested)
             - **Linux:** `.deb` / `.AppImage` (unsigned, untested)
 
             On first run, download the speech and voice models from the app's
