@@ -59,6 +59,13 @@ Built with Tauri 2 and React. Windows-first — macOS and Linux code paths exist
 - Settings for shortcuts (with a recorder and conflict warnings), light/dark theme, starting with Windows, and auto-paste
 - You always get a notification telling you what happened — nothing fails silently
 
+> **A note on the `Fn` key:** `Fn` can't be part of a shortcut. Windows has no
+> `Fn` modifier, and on nearly every keyboard `Fn` is handled inside the keyboard's
+> own firmware, so the OS never sees it. The recorder binds what your keyboard
+> actually sends. On a programmable keyboard (QMK/VIA or a vendor tool), map the
+> Fn-layer key to one of `F13`–`F24` and record that — those bind on their own, no
+> other modifier needed.
+
 ## Getting started
 
 ### Prerequisites (Windows)

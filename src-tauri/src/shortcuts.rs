@@ -6,6 +6,12 @@ use tauri::{AppHandle, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 /// Validate an accelerator string ("Ctrl+Shift+D", "CmdOrCtrl+Space", ...).
+///
+/// NOTE: parsing OK does not imply the combo can be REGISTERED on Windows.
+/// `global-hotkey` parses some keys it then has no `VK_` code for — `Code::Fn`
+/// is the live example — so registration still fails at `RegisterHotKey`. The
+/// recorder (`src/lib/accelerator.ts`) only ever emits keys that both parse and
+/// have a VK; keep any new key names in sync with that map.
 pub fn parse(accel: &str) -> Result<Shortcut, String> {
     let accel = accel.trim();
     if accel.is_empty() {
@@ -338,6 +344,19 @@ mod tests {
     #[test]
     fn parses_cross_platform_modifier() {
         assert!(parse("CmdOrCtrl+Space").is_ok());
+    }
+
+    #[test]
+    fn parses_standalone_function_key() {
+        // The recorder emits bare F13–F24 for Fn-layer keys, no modifier.
+        assert!(parse("F13").is_ok());
+    }
+
+    #[test]
+    fn parses_standalone_media_keys() {
+        // Media/volume keys are the other class the recorder allows bare.
+        assert!(parse("MediaPlayPause").is_ok());
+        assert!(parse("AudioVolumeUp").is_ok());
     }
 
     #[test]

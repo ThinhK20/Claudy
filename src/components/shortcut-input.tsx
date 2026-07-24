@@ -1,43 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { captureShortcut } from "@/lib/accelerator";
 import {
   checkShortcut,
   resumeGlobalShortcuts,
   suspendGlobalShortcuts,
 } from "@/lib/shortcuts-api";
 import { cn } from "@/lib/utils";
-
-/** Keys that never terminate a capture on their own. */
-const MODIFIERS = new Set(["Control", "Shift", "Alt", "Meta"]);
-
-/**
- * Map a keydown to a Tauri accelerator string, or null when the event is
- * not capturable. Supported main keys: letters, digits, F1–F24, Space —
- * always with at least one modifier (global shortcuts need one).
- */
-export function acceleratorFromEvent(e: {
-  key: string;
-  code: string;
-  ctrlKey: boolean;
-  altKey: boolean;
-  shiftKey: boolean;
-  metaKey: boolean;
-}): string | null {
-  if (MODIFIERS.has(e.key)) return null;
-  const mods: string[] = [];
-  if (e.ctrlKey) mods.push("Ctrl");
-  if (e.altKey) mods.push("Alt");
-  if (e.shiftKey) mods.push("Shift");
-  if (e.metaKey) mods.push("Super");
-  if (mods.length === 0) return null;
-  let main: string | null = null;
-  if (/^Key[A-Z]$/.test(e.code)) main = e.code.slice(3);
-  else if (/^Digit[0-9]$/.test(e.code)) main = e.code.slice(5);
-  else if (/^F([1-9]|1[0-9]|2[0-4])$/.test(e.key)) main = e.key;
-  else if (e.code === "Space") main = "Space";
-  if (!main) return null;
-  return [...mods, main].join("+");
-}
 
 interface ShortcutInputProps {
   value: string;
@@ -62,6 +31,10 @@ export function ShortcutInput({
 }: ShortcutInputProps) {
   const [capturing, setCapturing] = useState(false);
   const [warning, setWarning] = useState("");
+  // Why the last press couldn't be bound. Without this a rejected key is
+  // indistinguishable from a dead recorder — which is exactly how an Fn-layer
+  // key that Windows can't see used to look.
+  const [rejected, setRejected] = useState("");
   const capturingRef = useRef(false);
 
   // Registered combos are consumed by the OS (RegisterHotKey) and never
@@ -71,6 +44,7 @@ export function ShortcutInput({
   const startCapture = () => {
     if (capturingRef.current) return;
     capturingRef.current = true;
+    setRejected("");
     setCapturing(true);
     void suspendGlobalShortcuts().catch(() => {});
   };
@@ -83,6 +57,7 @@ export function ShortcutInput({
     if (!capturingRef.current) return;
     capturingRef.current = false;
     setCapturing(false);
+    setRejected("");
     try {
       await resumeGlobalShortcuts();
     } catch {
@@ -130,8 +105,15 @@ export function ShortcutInput({
       if (allowClear) void endCapture().then(() => onChange(""));
       return;
     }
-    const accel = acceleratorFromEvent(e);
-    if (accel) void endCapture().then(() => onChange(accel));
+    const { accelerator, message } = captureShortcut(e);
+    if (accelerator) {
+      setRejected("");
+      void endCapture().then(() => onChange(accelerator));
+      return;
+    }
+    // Capture stays open so the user can try another key. An empty message
+    // means a modifier on its own — say nothing, they're still reaching.
+    setRejected(message);
   };
 
   return (
@@ -160,9 +142,10 @@ export function ShortcutInput({
       <p className="text-muted-foreground text-xs">
         {capturing
           ? `Esc cancels${allowClear ? ", Backspace clears" : ""}`
-          : "Click, then press a combination like Ctrl+Shift+G"}
+          : "Click, then press a combination like Ctrl+Shift+G. A bare F13–F24 or media key works too — but it's taken from every app system-wide."}
       </p>
-      {warning && <p className="text-destructive text-sm">{warning}</p>}
+      {rejected && <p className="text-destructive text-sm">{rejected}</p>}
+      {!rejected && warning && <p className="text-destructive text-sm">{warning}</p>}
     </div>
   );
 }
