@@ -323,10 +323,12 @@ struct DictationEvent {
     message: Option<String>,
 }
 
-/// Single choke point for state fan-out: webview event + tray icon.
+/// Single choke point for state fan-out: webview event + tray icon + the
+/// wake listener, which must yield the microphone whenever dictation wants it.
 fn publish(app: &AppHandle, phase: &'static str, message: Option<String>) {
     let _ = app.emit("dictation-state", DictationEvent { phase, message });
-    tray::set_recording(app, phase == "recording");
+    tray::refresh(app);
+    crate::wake::reconcile(app);
 }
 
 /// Publish "recording", carrying the latched hint when one applies. Called

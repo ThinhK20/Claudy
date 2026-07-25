@@ -34,19 +34,24 @@ pub fn normalize_language(language: &str) -> &str {
     if trimmed.is_empty() { "auto" } else { trimmed }
 }
 
-pub fn resolve_model_path(settings: &Settings) -> Result<PathBuf, String> {
-    if settings.model.is_empty() {
+/// Path to a downloaded model by id, or a user-facing reason it can't be used.
+/// Takes the id explicitly because the wake-word listener runs its own small
+/// model, independent of the one dictation transcribes with.
+pub fn model_path_for(models_dir_override: &str, id: &str) -> Result<PathBuf, String> {
+    if id.is_empty() {
         return Err("No model selected. Choose a model on the Transcription page.".into());
     }
-    let path = models::resolve_dir(&settings.models_dir_override)
-        .join(models::model_filename(&settings.model));
+    let path = models::resolve_dir(models_dir_override).join(models::model_filename(id));
     if !path.is_file() {
         return Err(format!(
-            "Model '{}' is not downloaded. Download it on the Transcription page.",
-            settings.model
+            "Model '{id}' is not downloaded. Download it on the Transcription page."
         ));
     }
     Ok(path)
+}
+
+pub fn resolve_model_path(settings: &Settings) -> Result<PathBuf, String> {
+    model_path_for(&settings.models_dir_override, &settings.model)
 }
 
 impl WhisperEngine {
@@ -131,6 +136,7 @@ pub async fn transcribe_samples(
 #[tauri::command]
 pub async fn stop_capture_and_transcribe(app: AppHandle) -> Result<TranscriptionResult, String> {
     let samples = audio::stop(&app.state::<audio::AudioState>())?;
+    crate::wake::reconcile(&app); // the capture slot is free again
     transcribe_samples(&app, samples).await
 }
 

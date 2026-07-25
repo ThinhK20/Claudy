@@ -48,6 +48,10 @@ Built with Tauri 2 and React. Windows-first — macOS and Linux code paths exist
 
 ### Quick-ask voice assistant
 - Press `Ctrl+Shift+Space` (changeable) and an ask box opens at your cursor
+- Or just say **"Hey Claudy"** — the ask box opens with the microphone already
+  running, so you can ask without touching the keyboard. Off by default; turn it
+  on under Assistant → Wake word, where you can also change the phrase, pick a
+  small detection model, and loosen or tighten the match
 - Answers appear in a floating panel: copy them, ask a follow-up, replay the voice, or let the panel close on its own
 - Answers can be spoken aloud by a local voice (Kokoro, ~115 MB download) — works fully offline, with a choice of voices, speed, and volume
 - Give the assistant standing instructions with a **custom system prompt** — set its tone, language, or answer style once and it applies to every question
@@ -125,6 +129,10 @@ models/             Locally downloaded Whisper models (gitignored)
 
 - Zero telemetry
 - Dictation audio is processed in-memory and never leaves your machine
+- The wake word is off until you turn it on. While it listens, it keeps only the
+  last couple of seconds of audio in memory, recognises them on your machine, and
+  throws them away — nothing is written to disk or sent anywhere. A blue tray dot
+  shows whenever it is listening
 - API keys live only in the OS credential store
 - Selected text is sent only to the AI provider you configured, only when you trigger a prompt
 

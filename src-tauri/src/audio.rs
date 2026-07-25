@@ -51,18 +51,21 @@ struct MicLevel {
     level: f32,
 }
 
-struct StreamParts {
-    stream: cpal::Stream,
-    buffer: Arc<Mutex<Vec<f32>>>,
-    level: Arc<Mutex<f32>>,
-    channels: u16,
-    sample_rate: u32,
+/// A live input stream plus the buffers its callback writes into. Shared with
+/// `wake`, which drives its own drain loop instead of `start`'s
+/// accumulate-everything one.
+pub struct StreamParts {
+    pub stream: cpal::Stream,
+    pub buffer: Arc<Mutex<Vec<f32>>>,
+    pub level: Arc<Mutex<f32>>,
+    pub channels: u16,
+    pub sample_rate: u32,
 }
 
 // Device matching is name-based (user-facing selection), so keep DeviceTrait::name
 // even though rodio's cpal re-export marks it deprecated.
 #[allow(deprecated)]
-fn build_stream(device_name: &str) -> Result<StreamParts, String> {
+pub fn build_stream(device_name: &str) -> Result<StreamParts, String> {
     use cpal::traits::{DeviceTrait, HostTrait};
 
     let host = cpal::default_host();
@@ -220,17 +223,24 @@ pub fn start_capture(
     state: tauri::State<AudioState>,
     device: String,
 ) -> Result<(), String> {
-    let mut slot = state.0.lock().map_err(|_| "audio state poisoned")?;
-    if slot.is_some() {
-        return Err("Already recording".into());
+    {
+        let mut slot = state.0.lock().map_err(|_| "audio state poisoned")?;
+        if slot.is_some() {
+            return Err("Already recording".into());
+        }
+        // Claiming the slot before building the stream stops the wake listener
+        // from grabbing the microphone underneath us on its next reconcile.
+        *slot = Some(start(app.clone(), device)?);
     }
-    *slot = Some(start(app, device)?);
+    crate::wake::reconcile(&app);
     Ok(())
 }
 
 #[tauri::command]
-pub fn stop_capture(state: tauri::State<AudioState>) -> Result<(), String> {
-    stop(&state).map(|_| ()) // mic test: samples are discarded, never stored
+pub fn stop_capture(app: AppHandle, state: tauri::State<AudioState>) -> Result<(), String> {
+    let result = stop(&state).map(|_| ()); // mic test: samples are discarded, never stored
+    crate::wake::reconcile(&app); // the slot is free again
+    result
 }
 
 #[cfg(test)]

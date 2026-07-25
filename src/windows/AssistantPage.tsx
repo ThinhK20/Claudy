@@ -22,6 +22,13 @@ import { useSettings } from "@/lib/settings-store";
 import { insertAtCursor } from "@/lib/insert-at-cursor";
 import { useMicTranscription } from "@/lib/use-mic-transcription";
 import {
+  isSpeechLevel,
+  nextPhase,
+  TICK_MS,
+  type ListenPhase,
+} from "@/lib/silence-detector";
+import { isEffectivelyEmpty } from "@/lib/transcript";
+import {
   activeProviderSupportsImages,
   askAssistant,
   assistantNewQuestion,
@@ -53,6 +60,21 @@ type Mode = "ask" | "remind";
  *  IPC round trip per keystroke. The parse itself is local and instant. */
 const PREVIEW_DEBOUNCE_MS = 150;
 
+/**
+ * A hands-free session opened by the wake word.
+ *
+ * `off` is every other case, including the mic button — pressing that by hand
+ * keeps the old behavior, because your hands are already there.
+ */
+type VoiceStage = "off" | "starting" | "listening" | "confirming";
+
+/** How long the transcript sits in the box before it sends itself. Enough to
+ *  catch a bad transcription, short enough to still feel automatic. */
+const CONFIRM_MS = 1500;
+
+const NO_SPEECH_NOTE = "Didn't hear a question — type it instead.";
+const UNCLEAR_NOTE = "Didn't catch that — type your question.";
+
 export default function AssistantPage() {
   return (
     <ThemeProvider>
@@ -82,6 +104,10 @@ function AssistantPanel() {
   const [preview, setPreview] = useState<ReminderPreview | null>(null);
   const [savingReminder, setSavingReminder] = useState(false);
   const [reminderError, setReminderError] = useState<string | null>(null);
+  // Set when the wake word opened this box, then driven to completion by the
+  // effects below: start the mic, stop on silence, send the transcript.
+  const [voiceStage, setVoiceStage] = useState<VoiceStage>("off");
+  const [voiceNote, setVoiceNote] = useState<string | null>(null);
 
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -108,6 +134,8 @@ function AssistantPanel() {
         setPreview(null);
         setReminderError(null);
         setSavingReminder(false);
+        setVoiceStage(s.voice ? "starting" : "off");
+        setVoiceNote(null);
       }
     });
     return () => {
@@ -234,12 +262,92 @@ function AssistantPanel() {
     [draft],
   );
 
-  const mic = useMicTranscription({ device: micDevice, onText: insertTranscript });
+  // Read inside the transcription callback, which is created before the stage
+  // it has to branch on can change.
+  const voiceStageRef = useRef<VoiceStage>("off");
+  voiceStageRef.current = voiceStage;
+
+  const onTranscript = useCallback(
+    (text: string) => {
+      if (voiceStageRef.current !== "listening") {
+        insertTranscript(text);
+        return;
+      }
+      // A wake-word session: the box is empty by construction, so replace
+      // rather than insert — and never send whisper's non-speech placeholders.
+      if (isEffectivelyEmpty(text)) {
+        setVoiceStage("off");
+        setVoiceNote(UNCLEAR_NOTE);
+        return;
+      }
+      setDraft(text.trim());
+      setVoiceStage("confirming");
+    },
+    [insertTranscript],
+  );
+
+  const mic = useMicTranscription({ device: micDevice, onText: onTranscript });
+
+  // Latest level, so the silence tick can read it without the interval
+  // depending on — and restarting for — every level change.
+  const levelRef = useRef(0);
+  levelRef.current = mic.level;
+
+  /** The user took over: stop anything from happening on its own. */
+  const cancelVoice = useCallback(() => setVoiceStage("off"), []);
 
   // Never leave the mic recording once we leave the input phase (submit/close).
   useEffect(() => {
-    if (phase !== "input") mic.cancel();
+    if (phase !== "input") {
+      mic.cancel();
+      setVoiceStage("off");
+    }
   }, [phase, mic.cancel]);
+
+  // Opened by the wake word: start recording immediately, so saying
+  // "hey claudy" and then the question needs no keyboard at all. Without a
+  // transcription model there is nothing to start, and the box stays typable.
+  useEffect(() => {
+    if (voiceStage !== "starting" || phase !== "input" || mic.state !== "idle") return;
+    if (!hasSttModel) {
+      setVoiceStage("off");
+      return;
+    }
+    mic.toggle();
+    setVoiceStage("listening");
+  }, [voiceStage, phase, hasSttModel, mic.state, mic.toggle]);
+
+  // Watch for the speaker stopping. Ticks on a fixed clock rather than off
+  // level changes: an unvarying level produces no re-render, and "the level
+  // stopped changing" is precisely the case that has to be caught.
+  useEffect(() => {
+    if (voiceStage !== "listening" || mic.state !== "recording") return;
+    const startedAt = Date.now();
+    let lastLoud = startedAt;
+    let listenPhase: ListenPhase = "waiting";
+    const id = setInterval(() => {
+      const now = Date.now();
+      const speaking = isSpeechLevel(levelRef.current);
+      if (speaking) lastLoud = now;
+      listenPhase = nextPhase(listenPhase, speaking, now - lastLoud, now - startedAt);
+      if (listenPhase === "done") {
+        clearInterval(id);
+        mic.toggle(); // stop and transcribe; onTranscript takes it from here
+      } else if (listenPhase === "gave-up") {
+        clearInterval(id);
+        mic.cancel();
+        setVoiceStage("off");
+        setVoiceNote(NO_SPEECH_NOTE);
+      }
+    }, TICK_MS);
+    return () => clearInterval(id);
+  }, [voiceStage, mic.state, mic.toggle, mic.cancel]);
+
+  // A failed recording drops out of the hands-free flow rather than leaving a
+  // dead "Listening…" hint on screen.
+  useEffect(() => {
+    if (mic.error) setVoiceStage("off");
+  }, [mic.error]);
 
   // Switching modes drops attachments: an image can't be part of a reminder,
   // and silently carrying it back into Ask mode would surprise.
@@ -285,7 +393,24 @@ function AssistantPanel() {
     );
   }, [remindMode, saveReminder, draft, attachments, supportsImages]);
 
+  const submitRef = useRef(submit);
+  submitRef.current = submit;
+
+  // The cancel window: the transcript is on screen and sends itself unless the
+  // user takes over. Deliberately not dependent on `submit`, whose identity
+  // changes with the draft — the timer must not restart underneath itself.
+  useEffect(() => {
+    if (voiceStage !== "confirming") return;
+    const id = setTimeout(() => {
+      setVoiceStage("off");
+      submitRef.current();
+    }, CONFIRM_MS);
+    return () => clearTimeout(id);
+  }, [voiceStage]);
+
   const onInputKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // Any key means the user is taking over — stop the automatic send.
+    cancelVoice();
     if (e.key === "Escape") {
       e.preventDefault();
       mic.cancel();
@@ -311,6 +436,7 @@ function AssistantPanel() {
           data-tauri-drag-region
           onDrop={onDrop}
           onDragOver={onDragOver}
+          onMouseDown={cancelVoice}
           className="bg-popover border-border flex h-full flex-col gap-2 rounded-xl border p-3 shadow-lg"
         >
           {remindMode && (
@@ -360,11 +486,16 @@ function AssistantPanel() {
             </p>
           )}
           {mic.error && <p className="text-destructive text-xs">{mic.error}</p>}
+          {voiceNote && <p className="text-muted-foreground text-xs">{voiceNote}</p>}
           <div className="text-muted-foreground flex items-center justify-between gap-2 text-xs">
             <span data-tauri-drag-region className="select-none">
-              {remindMode
-                ? "Enter to save · Shift+Tab to Ask · Esc to close"
-                : "Enter to send · Shift+Tab to Remind · Esc to close"}
+              {voiceStage === "listening"
+                ? "Listening… just pause when you're done"
+                : voiceStage === "confirming"
+                  ? "Sending — press any key to edit"
+                  : remindMode
+                    ? "Enter to save · Shift+Tab to Ask · Esc to close"
+                    : "Enter to send · Shift+Tab to Remind · Esc to close"}
             </span>
             <div className="flex items-center gap-1">
               <input
