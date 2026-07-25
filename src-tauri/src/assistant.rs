@@ -100,7 +100,7 @@ fn current_generation(app: &AppHandle) -> u64 {
     app.state::<AssistantState>().generation.load(Ordering::SeqCst)
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AssistantEvent {
     phase: &'static str,
@@ -108,21 +108,27 @@ struct AssistantEvent {
     answer: Option<String>,
     message: Option<String>,
     tts_error: Option<String>,
+    /// Set when the wake word opened the box: the frontend starts the
+    /// microphone straight away so the flow stays hands-free.
+    voice: bool,
 }
 
-/// Single choke point for state fan-out to the assistant webview.
-fn publish(
-    app: &AppHandle,
+/// The common shape — a phase plus the question/answer it applies to. Anything
+/// rarer is spread over this: `AssistantEvent { voice: true, ..event(..) }`.
+fn event(
     phase: &'static str,
     question: Option<String>,
     answer: Option<String>,
-    message: Option<String>,
-    tts_error: Option<String>,
-) {
-    let _ = app.emit(
-        "assistant-state",
-        AssistantEvent { phase, question, answer, message, tts_error },
-    );
+) -> AssistantEvent {
+    AssistantEvent { phase, question, answer, ..Default::default() }
+}
+
+/// Single choke point for state fan-out to the assistant webview. Also
+/// reconciles the wake listener, which must not hold the microphone while the
+/// panel is open — nor hear Claudy speaking its own answer.
+fn publish(app: &AppHandle, event: AssistantEvent) {
+    let _ = app.emit("assistant-state", event);
+    crate::wake::reconcile(app);
 }
 
 /// Resize the assistant window to a logical size, converting to physical via
@@ -187,6 +193,16 @@ pub fn toggle(app: &AppHandle) {
 
 /// Position the input popup at the cursor and show it focused.
 pub fn show_input(app: &AppHandle) -> Result<(), String> {
+    show_input_with(app, false)
+}
+
+/// Same, but the frontend starts recording immediately — the wake word's
+/// entry point, where the user's hands are busy by definition.
+pub fn show_input_voice(app: &AppHandle) -> Result<(), String> {
+    show_input_with(app, true)
+}
+
+fn show_input_with(app: &AppHandle, voice: bool) -> Result<(), String> {
     let w = app
         .get_webview_window(ASSISTANT_LABEL)
         .ok_or("assistant window missing")?;
@@ -223,7 +239,7 @@ pub fn show_input(app: &AppHandle) -> Result<(), String> {
     set_phase(app, Phase::Input);
     w.show().map_err(|e| e.to_string())?;
     w.set_focus().map_err(|e| e.to_string())?;
-    publish(app, "input", None, None, None, None);
+    publish(app, AssistantEvent { voice, ..event("input", None, None) });
     Ok(())
 }
 
@@ -241,15 +257,14 @@ pub fn ask(app: &AppHandle, question: String, images: Vec<ai::ImageAttachment>) 
         set_phase(app, Phase::Error);
         publish(
             app,
-            "error",
-            Some(question),
-            None,
-            Some(
-                "The current model can't read images — remove them or switch to a \
-                 vision-capable provider in Settings."
-                    .to_string(),
-            ),
-            None,
+            AssistantEvent {
+                message: Some(
+                    "The current model can't read images — remove them or switch to a \
+                     vision-capable provider in Settings."
+                        .to_string(),
+                ),
+                ..event("error", Some(question), None)
+            },
         );
         return;
     }
@@ -257,7 +272,7 @@ pub fn ask(app: &AppHandle, question: String, images: Vec<ai::ImageAttachment>) 
     *app.state::<AssistantState>().last_question.lock().unwrap() = Some(question.clone());
     set_phase(app, Phase::Loading);
     resize_to(app, remembered_panel_size(app));
-    publish(app, "loading", Some(question.clone()), None, None, None);
+    publish(app, event("loading", Some(question.clone()), None));
 
     // Web search only when the user opted in AND the active provider offers a
     // native tool; otherwise it silently no-ops (ollama/openai_compatible).
@@ -281,12 +296,21 @@ pub fn ask(app: &AppHandle, question: String, images: Vec<ai::ImageAttachment>) 
             Ok(answer) => {
                 *app.state::<AssistantState>().last_answer.lock().unwrap() = Some(answer.clone());
                 set_phase(&app, Phase::Answering);
-                publish(&app, "answering", Some(question.clone()), Some(answer.clone()), None, None);
+                publish(
+                    &app,
+                    event("answering", Some(question.clone()), Some(answer.clone())),
+                );
                 maybe_speak(&app, generation, question, answer).await;
             }
             Err(message) => {
                 set_phase(&app, Phase::Error);
-                publish(&app, "error", Some(question), None, Some(message), None);
+                publish(
+                    &app,
+                    AssistantEvent {
+                        message: Some(message),
+                        ..event("error", Some(question), None)
+                    },
+                );
             }
         }
     });
@@ -350,7 +374,10 @@ async fn maybe_speak(app: &AppHandle, generation: u64, question: String, answer:
         }
         if first {
             set_phase(app, Phase::Speaking);
-            publish(app, "speaking", Some(question.clone()), Some(answer.clone()), None, None);
+            publish(
+                app,
+                event("speaking", Some(question.clone()), Some(answer.clone())),
+            );
             first = false;
         }
     }
@@ -361,14 +388,20 @@ async fn maybe_speak(app: &AppHandle, generation: u64, question: String, answer:
     wait_for_drain(app, generation).await;
     if current_generation(app) == generation {
         set_phase(app, Phase::Answering);
-        publish(app, "answering", Some(question), Some(answer), None, None);
+        publish(app, event("answering", Some(question), Some(answer)));
     }
 }
 
 /// Non-fatal TTS problem: keep the answer, add an inline note.
 fn tts_note(app: &AppHandle, question: String, answer: String, note: &str) {
     set_phase(app, Phase::Answering);
-    publish(app, "answering", Some(question), Some(answer), None, Some(note.to_string()));
+    publish(
+        app,
+        AssistantEvent {
+            tts_error: Some(note.to_string()),
+            ..event("answering", Some(question), Some(answer))
+        },
+    );
 }
 
 /// Poll until playback finishes or the generation changes.
@@ -394,7 +427,7 @@ pub fn close(app: &AppHandle) {
         let _ = w.hide();
     }
     set_phase(app, Phase::Idle);
-    publish(app, "idle", None, None, None, None);
+    publish(app, event("idle", None, None));
 }
 
 #[tauri::command]
@@ -439,7 +472,7 @@ pub fn assistant_new_question(app: AppHandle) -> Result<(), String> {
         let _ = w.set_focus();
     }
     set_phase(&app, Phase::Input);
-    publish(&app, "input", None, None, None, None);
+    publish(&app, event("input", None, None));
     Ok(())
 }
 
@@ -452,7 +485,7 @@ pub fn stop_assistant_speech(app: AppHandle) -> Result<(), String> {
     let a = assistant.last_answer.lock().unwrap().clone();
     if *assistant.phase.lock().unwrap() == Phase::Speaking {
         set_phase(&app, Phase::Answering);
-        publish(&app, "answering", q, a, None, None);
+        publish(&app, event("answering", q, a));
     }
     Ok(())
 }
@@ -471,14 +504,14 @@ pub fn replay_assistant_speech(app: AppHandle) -> Result<(), String> {
     let q = assistant.last_question.lock().unwrap().clone();
     let a = assistant.last_answer.lock().unwrap().clone();
     set_phase(&app, Phase::Speaking);
-    publish(&app, "speaking", q.clone(), a.clone(), None, None);
+    publish(&app, event("speaking", q.clone(), a.clone()));
 
     let app2 = app.clone();
     tauri::async_runtime::spawn(async move {
         wait_for_drain(&app2, generation).await;
         if current_generation(&app2) == generation {
             set_phase(&app2, Phase::Answering);
-            publish(&app2, "answering", q, a, None, None);
+            publish(&app2, event("answering", q, a));
         }
     });
     Ok(())

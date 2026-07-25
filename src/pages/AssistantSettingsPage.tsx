@@ -19,7 +19,12 @@ import { ShortcutInput } from "@/components/shortcut-input";
 import { ToggleRow } from "@/components/toggle-row";
 import { SystemPromptEditor } from "@/components/assistant/system-prompt-editor";
 import { VoiceModelManager } from "@/components/assistant/voice-model-manager";
-import { useSettings, type Settings } from "@/lib/settings-store";
+import { WakeWordCard } from "@/components/assistant/wake-word-settings";
+import {
+  useSettings,
+  type Settings,
+  type WakeWordSettings,
+} from "@/lib/settings-store";
 
 const AUTO_CLOSE_OPTIONS: { value: number; label: string }[] = [
   { value: 0, label: "Never" },
@@ -141,6 +146,17 @@ export default function AssistantSettingsPage() {
           </div>
         </CardContent>
       </Card>
+
+      <WakeWordCard
+        onChange={(patch: Partial<WakeWordSettings>) =>
+          void safeUpdate({
+            assistant: {
+              ...settings.assistant,
+              wakeWord: { ...settings.assistant.wakeWord, ...patch },
+            },
+          })
+        }
+      />
 
       <SystemPromptEditor />
 

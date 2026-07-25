@@ -17,6 +17,7 @@ mod shortcuts;
 mod stt;
 mod tray;
 mod tts;
+mod wake;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -43,6 +44,7 @@ pub fn run() {
         .manage(tts::TtsState::default())
         .manage(prompt_flow::PromptFlowState::default())
         .manage(shortcuts::PromptShortcuts::default())
+        .manage(wake::WakeState::default())
         .invoke_handler(tauri::generate_handler![
             config::get_settings,
             config::update_settings,
@@ -89,7 +91,9 @@ pub fn run() {
             reminders::save_reminder,
             reminders::delete_reminder,
             reminders::snooze_reminder,
-            reminders::complete_reminder
+            reminders::complete_reminder,
+            wake::wake_word_listening,
+            wake::check_wake_phrase
         ])
         .setup(|app| {
             tray::create(app.handle())?;
@@ -98,6 +102,8 @@ pub fn run() {
             // Polls for due reminders; its first tick is immediate, so any
             // reminder that came due while Claudy was closed fires now.
             reminders::start_scheduler(app.handle().clone());
+            // No-op unless the user has opted into the wake word.
+            wake::init(app.handle());
             Ok(())
         })
         .on_window_event(|window, event| {

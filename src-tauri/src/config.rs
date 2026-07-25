@@ -67,6 +67,9 @@ pub struct AssistantSettings {
     pub panel_close_secs: u32, // 0 = never auto-close
     pub keep_open_while_speaking: bool,
     pub custom_system_prompt: String, // "" = no system prompt (today's behavior)
+    /// Spoken alternative to the shortcut. Lives in `wake.rs` next to the
+    /// listener that reads it, like `DictationMode` does for dictation.
+    pub wake_word: crate::wake::WakeWordSettings,
 }
 
 impl AssistantSettings {
@@ -91,6 +94,7 @@ impl Default for AssistantSettings {
             panel_close_secs: 15,
             keep_open_while_speaking: true,
             custom_system_prompt: String::new(),
+            wake_word: crate::wake::WakeWordSettings::default(),
         }
     }
 }
@@ -187,11 +191,18 @@ pub fn update_settings(app: AppHandle, settings: Settings) -> Result<(), String>
         )?;
     }
 
+    let wake_changed = old.assistant.wake_word != settings.assistant.wake_word;
+
     save(&app, &settings)?;
 
     // A changed reserved combo can free/claim a prompt binding, so reconcile.
     if dictation_changed || assistant_changed {
         crate::shortcuts::notify_sync_warnings(&app, &crate::shortcuts::sync_prompts(&app)?);
+    }
+    // Turning the wake word on/off, or changing the phrase or model, only
+    // takes effect once the listener is restarted against the saved settings.
+    if wake_changed || old.mic_device != settings.mic_device {
+        crate::wake::restart(&app);
     }
     Ok(())
 }
@@ -204,6 +215,10 @@ mod tests {
     fn defaults_are_privacy_safe() {
         let s = Settings::default();
         assert!(!s.auto_paste, "auto-paste must be opt-in");
+        assert!(
+            !s.assistant.wake_word.enabled,
+            "an always-on microphone must be opt-in"
+        );
         assert!(s.restore_clipboard);
         assert_eq!(s.theme, "system");
         assert_eq!(s.dictation_shortcut, "Ctrl+Shift+D");
@@ -330,6 +345,30 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(a.system_prompt().unwrap(), "Answer in Markdown.\n\nBe concise.");
+    }
+
+    #[test]
+    fn settings_written_before_the_wake_word_load_with_it_off() {
+        // No migration: the block is simply absent in existing settings.json,
+        // and its absence must never turn the microphone on.
+        let json = serde_json::json!({ "assistant": { "autoSpeak": false } });
+        let s: Settings = serde_json::from_value(json).unwrap();
+        assert_eq!(s.assistant.wake_word, crate::wake::WakeWordSettings::default());
+        assert!(!s.assistant.wake_word.enabled);
+    }
+
+    #[test]
+    fn wake_word_round_trips_nested_camel_case() {
+        let json = serde_json::json!({
+            "assistant": { "wakeWord": { "enabled": true, "phrase": "ok computer" } }
+        });
+        let s: Settings = serde_json::from_value(json).unwrap();
+        assert!(s.assistant.wake_word.enabled);
+        assert_eq!(s.assistant.wake_word.phrase, "ok computer");
+        assert_eq!(s.assistant.wake_word.model, "tiny"); // missing -> default
+        let v = serde_json::to_value(&s).unwrap();
+        assert_eq!(v["assistant"]["wakeWord"]["phrase"], "ok computer");
+        assert!(v["assistant"]["wakeWord"].get("sensitivity").is_some());
     }
 
     #[test]

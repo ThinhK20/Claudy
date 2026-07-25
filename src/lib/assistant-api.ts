@@ -15,6 +15,8 @@ export interface AssistantState {
   answer: string | null;
   message: string | null;
   ttsError: string | null;
+  /** The wake word opened the box — start the mic without waiting for a click. */
+  voice: boolean;
 }
 
 /** One image attached to a question. `data` is base64 without the data-URI

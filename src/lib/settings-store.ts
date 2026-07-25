@@ -16,6 +16,17 @@ export interface AiSettings {
   gemini: ProviderSettings;
 }
 
+/** How forgiving the wake-phrase match is against what whisper actually heard. */
+export type WakeSensitivity = "strict" | "balanced" | "lenient";
+
+export interface WakeWordSettings {
+  enabled: boolean;
+  phrase: string;
+  /** Whisper model used for detection only — kept small on purpose. */
+  model: string;
+  sensitivity: WakeSensitivity;
+}
+
 export interface AssistantSettings {
   shortcut: string;
   ttsVoice: string;
@@ -26,6 +37,7 @@ export interface AssistantSettings {
   panelCloseSecs: number;
   keepOpenWhileSpeaking: boolean;
   customSystemPrompt: string; // "" = no system prompt (default behavior)
+  wakeWord: WakeWordSettings;
 }
 
 /** "hold" = hold to talk, release to transcribe (a quick tap latches it). */
