@@ -10,6 +10,11 @@ const MONTHS = [
   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
 
+/** "Sat 25 Jul 2026" — the date half, spelled out for a picker's trigger. */
+export function formatDayLabel(d: Date): string {
+  return `${WEEKDAYS[d.getDay()]} ${d.getDate()} ${MONTHS[d.getMonth()]} ${d.getFullYear()}`;
+}
+
 /** RFC3339 -> Date, or null when the value is unusable. */
 export function parseDue(dueAt: string): Date | null {
   const d = new Date(dueAt);
@@ -75,6 +80,34 @@ export function toDateTimeLocal(dueAt: string): string {
     `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` +
     `T${pad(d.getHours())}:${pad(d.getMinutes())}`
   );
+}
+
+/**
+ * Take a `toDateTimeLocal` value apart for a picker that edits the two halves
+ * separately: the day as a local-midnight Date, the clock as "HH:mm". Either
+ * half is empty/null when the value is unusable.
+ */
+export function splitDateTimeLocal(value: string): {
+  date: Date | null;
+  time: string;
+} {
+  const [datePart = "", timePart = ""] = value.split("T");
+  const [y, m, d] = datePart.split("-").map(Number);
+  // Built from parts rather than `new Date(datePart)`: a bare "YYYY-MM-DD"
+  // parses as UTC midnight, which is the previous day anywhere west of London.
+  const usable =
+    /^\d{4}-\d{2}-\d{2}$/.test(datePart) && m >= 1 && m <= 12 && d >= 1 && d <= 31;
+  return {
+    date: usable ? new Date(y, m - 1, d) : null,
+    time: /^\d{2}:\d{2}/.test(timePart) ? timePart.slice(0, 5) : "",
+  };
+}
+
+/** Inverse of `splitDateTimeLocal`. An incomplete clock — what a time field
+ *  reports mid-edit — means midnight rather than an invalid value. */
+export function joinDateTimeLocal(date: Date, time: string): string {
+  const hhmm = /^\d{2}:\d{2}$/.test(time) ? time : "00:00";
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${hhmm}`;
 }
 
 /** Inverse of `toDateTimeLocal`: local wall-clock -> RFC3339 with this

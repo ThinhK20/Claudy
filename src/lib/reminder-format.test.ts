@@ -2,10 +2,13 @@ import { describe, expect, test } from "vitest";
 import {
   UNKNOWN_DUE_LABEL,
   byDueAt,
+  formatDayLabel,
   formatDue,
   fromDateTimeLocal,
   isOverdue,
+  joinDateTimeLocal,
   parseDue,
+  splitDateTimeLocal,
   toDateTimeLocal,
 } from "@/lib/reminder-format";
 
@@ -87,5 +90,53 @@ describe("datetime-local round trip", () => {
   test("returns empty strings for unusable input instead of throwing", () => {
     expect(toDateTimeLocal("nope")).toBe("");
     expect(fromDateTimeLocal("nope")).toBe("");
+  });
+});
+
+describe("splitDateTimeLocal", () => {
+  test("gives back the day at local midnight, not UTC midnight", () => {
+    const { date, time } = splitDateTimeLocal("2026-07-24T16:32");
+    // Would be the 23rd anywhere west of London if this parsed as UTC.
+    expect(date?.getDate()).toBe(24);
+    expect(date?.getMonth()).toBe(6);
+    expect(date?.getFullYear()).toBe(2026);
+    expect(date?.getHours()).toBe(0);
+    expect(time).toBe("16:32");
+  });
+
+  test("drops seconds a time field may append", () => {
+    expect(splitDateTimeLocal("2026-07-24T16:32:09").time).toBe("16:32");
+  });
+
+  test("reports each unusable half rather than throwing", () => {
+    expect(splitDateTimeLocal("")).toEqual({ date: null, time: "" });
+    expect(splitDateTimeLocal("nope").date).toBeNull();
+    expect(splitDateTimeLocal("2026-13-01T09:00").date).toBeNull();
+    expect(splitDateTimeLocal("2026-07-24").time).toBe("");
+    expect(splitDateTimeLocal("2026-07-24T1").time).toBe("");
+  });
+});
+
+describe("joinDateTimeLocal", () => {
+  test("pads the date back into the shape toDateTimeLocal produces", () => {
+    expect(joinDateTimeLocal(new Date(2026, 11, 5), "09:05")).toBe("2026-12-05T09:05");
+  });
+
+  test("survives a round trip through the split", () => {
+    const original = "2026-07-24T16:32";
+    const { date, time } = splitDateTimeLocal(original);
+    expect(joinDateTimeLocal(date!, time)).toBe(original);
+  });
+
+  test("falls back to midnight for a clock still being typed", () => {
+    expect(joinDateTimeLocal(new Date(2026, 6, 24), "")).toBe("2026-07-24T00:00");
+    expect(joinDateTimeLocal(new Date(2026, 6, 24), "9:")).toBe("2026-07-24T00:00");
+  });
+});
+
+describe("formatDayLabel", () => {
+  test("names the weekday and spells the month, with no clock", () => {
+    expect(formatDayLabel(new Date(2026, 6, 25))).toBe("Sat 25 Jul 2026");
+    expect(formatDayLabel(new Date(2026, 11, 5, 23, 59))).toBe("Sat 5 Dec 2026");
   });
 });

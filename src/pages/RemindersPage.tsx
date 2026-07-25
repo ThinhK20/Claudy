@@ -14,6 +14,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { DateTimePicker } from "@/components/reminders/date-time-picker";
 import {
   byDueAt,
   formatDue,
@@ -122,7 +123,9 @@ export default function RemindersPage() {
         <h2 className="text-muted-foreground text-xs font-medium tracking-wide uppercase">
           {label}
         </h2>
-        <Card>
+        {/* py-0: the rows bring their own vertical padding, so the card's
+            would only add a gap above the first and below the last. */}
+        <Card className="py-0">
           <CardContent className="p-0">
             {items.map((r) => (
               <ReminderRow
@@ -168,7 +171,7 @@ export default function RemindersPage() {
 
       {reminders.length === 0 && !error && (
         <Card>
-          <CardContent className="text-muted-foreground p-6 text-sm">
+          <CardContent className="text-muted-foreground text-sm">
             No reminders yet.
           </CardContent>
         </Card>
@@ -337,7 +340,7 @@ function ReminderEditor({ initial, onClose, onSaved }: ReminderEditorProps) {
 
   return (
     <Card>
-      <CardContent className="flex flex-col gap-3 p-4">
+      <CardContent className="flex flex-col gap-3">
         <h2 className="font-medium">{initial.id ? "Edit reminder" : "New reminder"}</h2>
         <Input
           autoFocus
@@ -345,12 +348,7 @@ function ReminderEditor({ initial, onClose, onSaved }: ReminderEditorProps) {
           placeholder="Follow up on this email"
           onChange={(e) => setText(e.target.value)}
         />
-        <Input
-          type="datetime-local"
-          value={when}
-          onChange={(e) => setWhen(e.target.value)}
-          className="max-w-xs"
-        />
+        <DateTimePicker value={when} onChange={setWhen} />
         {error && <p className="text-destructive text-sm">{error}</p>}
         <div className="flex items-center gap-2">
           <Button onClick={() => void submit()} disabled={saving}>
