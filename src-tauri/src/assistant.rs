@@ -13,6 +13,9 @@ const INPUT_SIZE: (u32, u32) = (420, 150);
 /// Taller input popup when image thumbnails are shown, so the row doesn't
 /// crowd the textarea.
 const INPUT_WITH_ATTACHMENTS_SIZE: (u32, u32) = (420, 264);
+/// Remind Mode adds the resolved-time chip under the textarea; without the
+/// extra height the chip and the hint row crowd each other.
+const INPUT_REMIND_SIZE: (u32, u32) = (420, 190);
 const PANEL_SIZE: (u32, u32) = (460, 380);
 /// Logical gap between the cursor and the window's near corner.
 const CURSOR_OFFSET: i32 = 14;
@@ -404,11 +407,16 @@ pub fn close_assistant(app: AppHandle) {
     close(&app);
 }
 
-/// Grow/shrink the input popup to fit the image-thumbnail row. The frontend
-/// calls this when the attachment count crosses zero.
+/// Grow/shrink the input popup to fit its current contents. The frontend calls
+/// this when the attachment count crosses zero or the mode toggles.
+/// Remind Mode wins: it hides attachments, so the two are never both true.
 #[tauri::command]
-pub fn resize_assistant_input(app: AppHandle, has_attachments: bool) {
-    let size = if has_attachments { INPUT_WITH_ATTACHMENTS_SIZE } else { INPUT_SIZE };
+pub fn resize_assistant_input(app: AppHandle, has_attachments: bool, remind_mode: bool) {
+    let size = match (remind_mode, has_attachments) {
+        (true, _) => INPUT_REMIND_SIZE,
+        (false, true) => INPUT_WITH_ATTACHMENTS_SIZE,
+        (false, false) => INPUT_SIZE,
+    };
     resize_to(&app, size);
 }
 

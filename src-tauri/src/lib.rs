@@ -10,6 +10,7 @@ mod notify;
 mod overlay;
 mod prompt_flow;
 mod prompts;
+mod reminders;
 mod secrets;
 mod selection;
 mod shortcuts;
@@ -81,12 +82,22 @@ pub fn run() {
             assistant::assistant_new_question,
             assistant::stop_assistant_speech,
             assistant::replay_assistant_speech,
-            assistant::get_assistant_state
+            assistant::get_assistant_state,
+            reminders::preview_reminder,
+            reminders::create_reminder_from_text,
+            reminders::list_reminders,
+            reminders::save_reminder,
+            reminders::delete_reminder,
+            reminders::snooze_reminder,
+            reminders::complete_reminder
         ])
         .setup(|app| {
             tray::create(app.handle())?;
             overlay::init(app.handle())?;
             shortcuts::init(app.handle());
+            // Polls for due reminders; its first tick is immediate, so any
+            // reminder that came due while Claudy was closed fires now.
+            reminders::start_scheduler(app.handle().clone());
             Ok(())
         })
         .on_window_event(|window, event| {

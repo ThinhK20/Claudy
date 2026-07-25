@@ -3,7 +3,18 @@ import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Check, Copy, Loader2, Mic, Paperclip, RotateCw, Square, Volume2, X } from "lucide-react";
+import {
+  AlarmClock,
+  Check,
+  Copy,
+  Loader2,
+  Mic,
+  Paperclip,
+  RotateCw,
+  Square,
+  Volume2,
+  X,
+} from "lucide-react";
 import { ThemeProvider } from "@/components/theme-provider";
 import { Button } from "@/components/ui/button";
 import { LevelBars } from "@/components/transcription/level-bars";
@@ -28,6 +39,19 @@ import {
   imageFilesOnly,
   type Attachment,
 } from "@/lib/image-attach";
+import { formatDue } from "@/lib/reminder-format";
+import {
+  createReminderFromText,
+  previewReminder,
+  type ReminderPreview,
+} from "@/lib/reminders-api";
+
+/** Ask a question, or queue a reminder. Shift+Tab toggles between them. */
+type Mode = "ask" | "remind";
+
+/** Debounce for the live time preview, so a fast typist doesn't trigger an
+ *  IPC round trip per keystroke. The parse itself is local and instant. */
+const PREVIEW_DEBOUNCE_MS = 150;
 
 export default function AssistantPage() {
   return (
@@ -54,10 +78,15 @@ function AssistantPanel() {
   const [draft, setDraft] = useState("");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [supportsImages, setSupportsImages] = useState(true);
+  const [mode, setMode] = useState<Mode>("ask");
+  const [preview, setPreview] = useState<ReminderPreview | null>(null);
+  const [savingReminder, setSavingReminder] = useState(false);
+  const [reminderError, setReminderError] = useState<string | null>(null);
 
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
+  const remindMode = mode === "remind";
   const hasAttachments = attachments.length > 0;
   const imagesBlocked = hasAttachments && !supportsImages;
 
@@ -70,10 +99,15 @@ function AssistantPanel() {
       if (s.answer !== null) setAnswer(s.answer);
       setMessage(s.message);
       setTtsError(s.ttsError);
-      // A fresh input drops the previous question's draft and attachments.
+      // A fresh input drops the previous question's draft and attachments,
+      // and starts back in Ask mode — the primary use of the box.
       if (s.phase === "input") {
         setDraft("");
         setAttachments([]);
+        setMode("ask");
+        setPreview(null);
+        setReminderError(null);
+        setSavingReminder(false);
       }
     });
     return () => {
@@ -97,11 +131,32 @@ function AssistantPanel() {
     return () => cancelAnimationFrame(raf);
   }, [phase, load]);
 
-  // Grow the popup to fit the thumbnail row, shrink back when it's empty.
+  // Grow the popup to fit the thumbnail row or the Remind Mode chip, shrink
+  // back when neither is showing.
   useEffect(() => {
     if (phase !== "input") return;
-    void resizeAssistantInput(hasAttachments);
-  }, [phase, hasAttachments]);
+    void resizeAssistantInput(hasAttachments, remindMode);
+  }, [phase, hasAttachments, remindMode]);
+
+  // Live time preview. Local parse only, so this stays cheap; a stale timer is
+  // cleared on every keystroke and when leaving Remind Mode.
+  useEffect(() => {
+    if (!remindMode) {
+      setPreview(null);
+      return;
+    }
+    const text = draft.trim();
+    if (!text) {
+      setPreview(null);
+      return;
+    }
+    const timer = setTimeout(() => {
+      previewReminder(text)
+        .then(setPreview)
+        .catch(() => setPreview(null)); // no chip beats a wrong chip
+    }, PREVIEW_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [draft, remindMode]);
 
   const addFiles = useCallback(async (files: File[]) => {
     const images = imageFilesOnly(files);
@@ -186,9 +241,41 @@ function AssistantPanel() {
     if (phase !== "input") mic.cancel();
   }, [phase, mic.cancel]);
 
-  const canSend = (draft.trim().length > 0 || hasAttachments) && !imagesBlocked;
+  // Switching modes drops attachments: an image can't be part of a reminder,
+  // and silently carrying it back into Ask mode would surprise.
+  const toggleMode = useCallback(() => {
+    setMode((m) => (m === "ask" ? "remind" : "ask"));
+    setAttachments([]);
+    setPreview(null);
+    setReminderError(null);
+  }, []);
+
+  const saveReminder = useCallback(async () => {
+    const text = draft.trim();
+    if (!text || savingReminder) return;
+    setSavingReminder(true);
+    setReminderError(null);
+    try {
+      await createReminderFromText(text);
+      // Rust already sent the "Reminder set for …" notification.
+      await closeAssistant();
+    } catch (e: unknown) {
+      // Keep the draft so the user can add a time instead of retyping.
+      setReminderError(String(e));
+    } finally {
+      setSavingReminder(false);
+    }
+  }, [draft, savingReminder]);
+
+  const canSend = remindMode
+    ? draft.trim().length > 0 && !savingReminder
+    : (draft.trim().length > 0 || hasAttachments) && !imagesBlocked;
 
   const submit = useCallback(() => {
+    if (remindMode) {
+      void saveReminder();
+      return;
+    }
     const q = draft.trim();
     if (!q && attachments.length === 0) return;
     if (attachments.length > 0 && !supportsImages) return;
@@ -196,13 +283,19 @@ function AssistantPanel() {
       q,
       attachments.map((a) => ({ mediaType: a.mediaType, data: a.data })),
     );
-  }, [draft, attachments, supportsImages]);
+  }, [remindMode, saveReminder, draft, attachments, supportsImages]);
 
   const onInputKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Escape") {
       e.preventDefault();
       mic.cancel();
       void closeAssistant();
+      return;
+    }
+    // preventDefault or the browser moves focus backwards instead.
+    if (e.key === "Tab" && e.shiftKey) {
+      e.preventDefault();
+      toggleMode();
       return;
     }
     if (e.key === "Enter" && !e.shiftKey) {
@@ -220,6 +313,12 @@ function AssistantPanel() {
           onDragOver={onDragOver}
           className="bg-popover border-border flex h-full flex-col gap-2 rounded-xl border p-3 shadow-lg"
         >
+          {remindMode && (
+            <div className="text-muted-foreground flex items-center gap-1.5 text-[11px] font-medium tracking-wide uppercase">
+              <AlarmClock className="h-3 w-3" />
+              Remind me
+            </div>
+          )}
           {hasAttachments && (
             <div className="flex flex-wrap gap-2">
               {attachments.map((a) => (
@@ -247,9 +346,14 @@ function AssistantPanel() {
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={onInputKeyDown}
             onPaste={onPaste}
-            placeholder="Ask anything… paste or drop an image"
+            placeholder={
+              remindMode
+                ? "Remind me to… e.g. follow up on this email in 2 hours"
+                : "Ask anything… paste or drop an image"
+            }
             className="placeholder:text-muted-foreground flex-1 resize-none bg-transparent text-sm outline-none"
           />
+          {remindMode && <ReminderChip {...{ draft, preview, savingReminder, reminderError }} />}
           {imagesBlocked && (
             <p className="text-destructive text-xs">
               The current model can't read images — remove them or switch provider in Settings.
@@ -258,7 +362,9 @@ function AssistantPanel() {
           {mic.error && <p className="text-destructive text-xs">{mic.error}</p>}
           <div className="text-muted-foreground flex items-center justify-between gap-2 text-xs">
             <span data-tauri-drag-region className="select-none">
-              Enter to send · Shift+Enter for a new line · Esc to close
+              {remindMode
+                ? "Enter to save · Shift+Tab to Ask · Esc to close"
+                : "Enter to send · Shift+Tab to Remind · Esc to close"}
             </span>
             <div className="flex items-center gap-1">
               <input
@@ -290,11 +396,14 @@ function AssistantPanel() {
                   <Mic className="h-4 w-4" />
                 )}
               </Button>
-              <Button size="sm" variant="ghost" aria-label="Attach image" onClick={openPicker}>
-                <Paperclip className="h-4 w-4" />
-              </Button>
+              {!remindMode && (
+                <Button size="sm" variant="ghost" aria-label="Attach image" onClick={openPicker}>
+                  <Paperclip className="h-4 w-4" />
+                </Button>
+              )}
               <Button size="sm" onClick={submit} disabled={!canSend}>
-                Ask
+                {savingReminder && <Loader2 className="h-4 w-4 animate-spin" />}
+                {remindMode ? "Remind" : "Ask"}
               </Button>
             </div>
           </div>
@@ -314,6 +423,50 @@ function AssistantPanel() {
         />
       )}
     </div>
+  );
+}
+
+interface ReminderChipProps {
+  draft: string;
+  preview: ReminderPreview | null;
+  savingReminder: boolean;
+  reminderError: string | null;
+}
+
+/**
+ * The one line under the Remind Mode box that says what Claudy understood.
+ * Enter saves whatever this shows, so it is the only confirmation step —
+ * an unresolved or failed parse has to be visible here, never silent.
+ */
+function ReminderChip({ draft, preview, savingReminder, reminderError }: ReminderChipProps) {
+  if (savingReminder) {
+    return (
+      <p className="text-muted-foreground flex items-center gap-1.5 text-xs">
+        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        Working out when…
+      </p>
+    );
+  }
+  if (reminderError) {
+    return <p className="text-destructive text-xs">{reminderError}</p>;
+  }
+  if (preview?.dueAt) {
+    return (
+      <p className="flex items-center gap-1.5 text-xs">
+        <AlarmClock className="h-3.5 w-3.5 shrink-0" />
+        <span className="font-medium">{formatDue(preview.dueAt, new Date())}</span>
+        {preview.title && (
+          <span className="text-muted-foreground truncate">· {preview.title}</span>
+        )}
+      </p>
+    );
+  }
+  return (
+    <p className="text-muted-foreground text-xs">
+      {draft.trim()
+        ? 'No time found yet — try "in 2 hours" or "tomorrow at 9am"'
+        : "When should I remind you?"}
+    </p>
   );
 }
 

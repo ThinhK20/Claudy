@@ -54,6 +54,14 @@ Built with Tauri 2 and React. Windows-first — macOS and Linux code paths exist
 - Services that support it can also search the web to answer (Anthropic, Gemini); others simply skip it
 - If the voice model is missing or speech fails, you still get the written answer with a short note
 
+### Reminders
+- In the ask box, press `Shift+Tab` to switch to **Remind me** mode, type `follow up on this email in 2 hours`, and press Enter
+- A line under the box shows the time Claudy worked out (`Today 16:32`) as you type, so a misread is visible before you save
+- Times are understood on your computer — `in 90m`, `at 5pm`, `tomorrow at 9`, `next friday`, `tonight`. Only when none of those fit does Claudy ask your AI service to work out the time
+- When it's due, a tray notification pops up with exactly what you typed
+- Anything that came due while Claudy was closed notifies as soon as you start it, marked overdue
+- The **Reminders** page lists everything: snooze, mark done, edit the time, or add one by hand
+
 ### App
 - Lives in the system tray; closing the window hides the app instead of quitting it
 - Settings for shortcuts (with a recorder and conflict warnings), light/dark theme, starting with Windows, and auto-paste
@@ -105,8 +113,8 @@ After installing, download a Whisper model from the Transcription page before us
 ```
 src/                React UI (pages, components, Tauri API bridges in src/lib)
 src-tauri/src/      Rust core: audio, stt, models, shortcuts, selection,
-                    inject, prompts, prompt_flow, tray, overlay, assistant,
-                    ai/ providers, tts/ (kokoro engine + playback)
+                    inject, prompts, prompt_flow, reminders, tray, overlay,
+                    assistant, ai/ providers, tts/ (kokoro engine + playback)
 branding/           Logo assets
 docs/BUILDING.md    Platform build instructions
 docs/screenshots/   README screenshots

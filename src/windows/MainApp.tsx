@@ -6,6 +6,7 @@ import { onNavigate } from "@/lib/dictation-api";
 import PromptsPage from "@/pages/PromptsPage";
 import TranscriptionPage from "@/pages/TranscriptionPage";
 import AssistantSettingsPage from "@/pages/AssistantSettingsPage";
+import RemindersPage from "@/pages/RemindersPage";
 import ProvidersPage from "@/pages/ProvidersPage";
 import SettingsPage from "@/pages/SettingsPage";
 
@@ -13,6 +14,7 @@ const PAGES: Record<PageKey, React.ComponentType> = {
   prompts: PromptsPage,
   transcription: TranscriptionPage,
   assistant: AssistantSettingsPage,
+  reminders: RemindersPage,
   providers: ProvidersPage,
   settings: SettingsPage,
 };

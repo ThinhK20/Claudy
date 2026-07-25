@@ -35,9 +35,12 @@ export const askAssistant = (
 export const activeProviderSupportsImages = (): Promise<boolean> =>
   invoke("active_provider_supports_images");
 
-/** Grow/shrink the input popup to fit the image-thumbnail row. */
-export const resizeAssistantInput = (hasAttachments: boolean): Promise<void> =>
-  invoke("resize_assistant_input", { hasAttachments });
+/** Grow/shrink the input popup to fit its contents. Remind Mode wins over the
+ *  image-thumbnail row — it hides attachments, so both are never true. */
+export const resizeAssistantInput = (
+  hasAttachments: boolean,
+  remindMode: boolean,
+): Promise<void> => invoke("resize_assistant_input", { hasAttachments, remindMode });
 
 /** Suppress blur-dismiss while a native file-picker dialog is open. */
 export const setAssistantDialogOpen = (open: boolean): Promise<void> =>
