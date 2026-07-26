@@ -90,9 +90,15 @@ export function ModelPrices({ pricesAsOf }: { pricesAsOf: string }) {
           <table className="w-full min-w-[34rem] text-sm">
             <thead>
               <tr className="text-muted-foreground border-b text-left">
-                <th className="py-2 pr-4 font-medium">Model</th>
-                <th className="py-2 pr-4 text-right font-medium">Input $/M</th>
-                <th className="py-2 pr-4 text-right font-medium">Output $/M</th>
+                {/* Model takes the slack so the price columns stay snug against
+                    their inputs instead of drifting apart. */}
+                <th className="w-full py-2 pr-4 font-medium">Model</th>
+                <th className="w-28 py-2 pr-4 text-right font-medium whitespace-nowrap">
+                  Input $/M
+                </th>
+                <th className="w-28 py-2 pr-4 text-right font-medium whitespace-nowrap">
+                  Output $/M
+                </th>
                 <th className="py-2 font-medium" />
               </tr>
             </thead>
@@ -151,30 +157,34 @@ function PriceRow({
         </div>
       </td>
       <td className="py-2 pr-4">
-        <Input
-          type="number"
-          min="0"
-          step="0.01"
-          inputMode="decimal"
-          aria-label={`Input price per million tokens for ${row.model}`}
-          className="ml-auto h-8 w-24 text-right tabular-nums"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onBlur={commit}
-        />
+        <div className="flex justify-end">
+          <Input
+            type="number"
+            min="0"
+            step="0.01"
+            inputMode="decimal"
+            aria-label={`Input price per million tokens for ${row.model}`}
+            className="h-8 w-24 text-right tabular-nums"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onBlur={commit}
+          />
+        </div>
       </td>
       <td className="py-2 pr-4">
-        <Input
-          type="number"
-          min="0"
-          step="0.01"
-          inputMode="decimal"
-          aria-label={`Output price per million tokens for ${row.model}`}
-          className="ml-auto h-8 w-24 text-right tabular-nums"
-          value={output}
-          onChange={(e) => setOutput(e.target.value)}
-          onBlur={commit}
-        />
+        <div className="flex justify-end">
+          <Input
+            type="number"
+            min="0"
+            step="0.01"
+            inputMode="decimal"
+            aria-label={`Output price per million tokens for ${row.model}`}
+            className="h-8 w-24 text-right tabular-nums"
+            value={output}
+            onChange={(e) => setOutput(e.target.value)}
+            onBlur={commit}
+          />
+        </div>
       </td>
       <td className="py-2 text-right">
         {row.overridden && (
