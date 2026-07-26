@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
+import type { ModelPrice } from "@/lib/usage-api";
 
 export type ProviderId = "openai_compatible" | "ollama" | "anthropic" | "gemini";
 
@@ -43,6 +44,16 @@ export interface AssistantSettings {
 /** "hold" = hold to talk, release to transcribe (a quick tap latches it). */
 export type DictationMode = "hold" | "toggle";
 
+/** The local usage log behind the Usage page. Metadata only, never sent
+ *  anywhere — see the Privacy section of the README. */
+export interface UsageSettings {
+  enabled: boolean;
+  /** Events older than this are dropped on the next write. 0 = keep forever. */
+  retentionDays: number;
+  /** Per-model price overrides for the cost estimate; empty = bundled table. */
+  modelPrices: ModelPrice[];
+}
+
 export interface Settings {
   theme: "light" | "dark" | "system";
   language: string;
@@ -58,6 +69,7 @@ export interface Settings {
   modelsDirOverride: string;
   ai: AiSettings;
   assistant: AssistantSettings;
+  usage: UsageSettings;
 }
 
 interface SettingsState {

@@ -598,7 +598,7 @@ async fn extract_with_ai(
         system: Some(extract_prompt(now)),
         ..Default::default()
     };
-    let reply = ai::complete_with_options(app, text, opts).await?;
+    let reply = ai::complete_with_options(app, text, opts, ai::UsageSource::ReminderParse).await?;
     let value = extract_json(&reply).ok_or_else(when_error)?;
     let due_at = value
         .get("dueAt")
@@ -656,6 +656,10 @@ fn fire_due(app: &AppHandle) {
     if let Err(e) = save_list(app, &updated) {
         eprintln!("reminders: could not persist fired state: {e}");
     }
+    // Metadata only: that a reminder fired, never which one.
+    for _ in &due {
+        crate::usage::record(app, crate::usage::UsageEvent::now(crate::usage::Source::ReminderFired));
+    }
     let _ = app.emit(CHANGED_EVENT, ());
 }
 
@@ -705,6 +709,7 @@ pub async fn create_reminder_from_text(app: AppHandle, text: String) -> Result<R
     };
     let list = upsert(load(&app)?, reminder.clone());
     save_list(&app, &list)?;
+    crate::usage::record(&app, crate::usage::UsageEvent::now(crate::usage::Source::ReminderCreated));
 
     let enabled = config::load(&app)
         .map(|s| s.notifications_enabled)
@@ -731,7 +736,9 @@ pub fn save_reminder(app: AppHandle, mut reminder: Reminder) -> Result<Reminder,
         return Err("Reminder text must not be empty".into());
     }
     let due = parse_due(&reminder.due_at).ok_or("Reminder needs a valid date and time")?;
-    if reminder.id.trim().is_empty() {
+    // This command backs both add and edit; only an add is a new reminder.
+    let is_new = reminder.id.trim().is_empty();
+    if is_new {
         reminder.id = uuid::Uuid::new_v4().to_string();
     }
     if reminder.created_at.trim().is_empty() {
@@ -745,6 +752,12 @@ pub fn save_reminder(app: AppHandle, mut reminder: Reminder) -> Result<Reminder,
 
     let list = upsert(load(&app)?, reminder.clone());
     save_list(&app, &list)?;
+    if is_new {
+        crate::usage::record(
+            &app,
+            crate::usage::UsageEvent::now(crate::usage::Source::ReminderCreated),
+        );
+    }
     let _ = app.emit(CHANGED_EVENT, ());
     Ok(reminder)
 }

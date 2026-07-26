@@ -2,6 +2,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
   AlarmClock,
+  ChartColumn,
   MessageSquareText,
   Mic,
   Plug,
@@ -14,6 +15,7 @@ export type PageKey =
   | "transcription"
   | "assistant"
   | "reminders"
+  | "usage"
   | "providers"
   | "settings";
 
@@ -22,6 +24,7 @@ const NAV: { key: PageKey; label: string; icon: React.ElementType }[] = [
   { key: "transcription", label: "Transcription", icon: Mic },
   { key: "assistant", label: "Assistant", icon: Sparkles },
   { key: "reminders", label: "Reminders", icon: AlarmClock },
+  { key: "usage", label: "Usage", icon: ChartColumn },
   { key: "providers", label: "Providers", icon: Plug },
   { key: "settings", label: "Settings", icon: Settings },
 ];

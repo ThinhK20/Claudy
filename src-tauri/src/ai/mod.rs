@@ -43,6 +43,44 @@ pub(crate) fn non_empty_system(opts: &RequestOptions) -> Option<&str> {
     opts.system.as_deref().map(str::trim).filter(|s| !s.is_empty())
 }
 
+/// What a provider reported about a completed request: token counts, plus the
+/// model it says it actually served. Feeds the usage log — never the request
+/// path, so a provider that reports nothing changes no behavior.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ResponseUsage {
+    pub input_tokens: u32,
+    pub output_tokens: u32,
+    /// Provider-reported model id. `None` = fall back to `default_model()`.
+    pub model: Option<String>,
+}
+
+/// The shape all four `parse_usage` impls share: parse the body, read two token
+/// pointers and a model pointer. `None` when the body isn't JSON or the
+/// provider reported neither token count — a renamed or dropped field costs the
+/// stats entry, never the completion.
+pub(crate) fn usage_from(
+    body: &str,
+    input_ptr: &str,
+    output_ptr: &str,
+    model_ptr: &str,
+) -> Option<ResponseUsage> {
+    let v: serde_json::Value = serde_json::from_str(body).ok()?;
+    let input = v.pointer(input_ptr).and_then(serde_json::Value::as_u64);
+    let output = v.pointer(output_ptr).and_then(serde_json::Value::as_u64);
+    if input.is_none() && output.is_none() {
+        return None;
+    }
+    Some(ResponseUsage {
+        input_tokens: input.unwrap_or(0) as u32,
+        output_tokens: output.unwrap_or(0) as u32,
+        model: v
+            .pointer(model_ptr)
+            .and_then(|m| m.as_str())
+            .map(str::to_string)
+            .filter(|s| !s.is_empty()),
+    })
+}
+
 /// Adding a provider = one new file implementing this + one registry line.
 pub trait AiProvider: Sync {
     #[allow(dead_code)] // part of the provider contract; exercised by registry tests
@@ -56,6 +94,18 @@ pub trait AiProvider: Sync {
     ) -> Result<HttpRequest, String>;
     /// Extract the completion text from a 2xx response body.
     fn parse_response(&self, body: &str) -> Result<String, String>;
+
+    /// The model this provider uses when `ProviderSettings.model` is "" — the
+    /// same constant each impl already feeds to `or_default`. Lets the usage log
+    /// record an effective model instead of an empty string.
+    fn default_model(&self) -> &'static str;
+
+    /// Token counts from a 2xx body. Defaults to `None` so a provider that
+    /// reports no usage (or changes its field names) simply records no tokens.
+    /// Must never fail the request.
+    fn parse_usage(&self, _body: &str) -> Option<ResponseUsage> {
+        None
+    }
 
     /// Does this provider offer a native web-search tool? Overridden per
     /// provider in Phase 2; defaults to false so ollama/openai_compatible
@@ -105,6 +155,17 @@ pub(crate) fn or_default<'a>(value: &'a str, default: &'a str) -> &'a str {
     if v.is_empty() { default } else { v }
 }
 
+/// The model a request actually ran against, for the usage log: what the
+/// provider reported wins (gateways resolve aliases and dated ids), else the
+/// configured model, else the provider default. Never empty — cost attribution
+/// needs something to key on.
+pub fn effective_model(p: &dyn AiProvider, cfg_model: &str, reported: Option<&str>) -> String {
+    match reported.map(str::trim).filter(|m| !m.is_empty()) {
+        Some(m) => m.to_string(),
+        None => or_default(cfg_model, p.default_model()).to_string(),
+    }
+}
+
 /// Human-readable reason for a non-2xx response (spec: auth / rate-limit /
 /// other, with the provider's own message when it sends JSON).
 pub fn friendly_http_error(status: u16, body: &str) -> String {
@@ -151,43 +212,125 @@ pub async fn send(req: HttpRequest) -> Result<String, String> {
     Ok(body)
 }
 
+/// Which flow made this call, for the usage log. Deliberately NOT part of
+/// `RequestOptions`: that struct is handed to `build_request_with`, and
+/// providers have no business seeing attribution data.
+#[derive(Debug, Clone)]
+pub enum UsageSource {
+    Prompt { id: String, name: String },
+    Assistant,
+    ReminderParse,
+    /// Connection tests and anything else that isn't the user doing work.
+    NotRecorded,
+}
+
+/// Log one provider round-trip. Infallible by construction — a stats write
+/// must never affect the completion it is measuring.
+fn record_usage(
+    app: &AppHandle,
+    source: &UsageSource,
+    provider_id: &str,
+    model: &str,
+    started: std::time::Instant,
+    usage: Option<&ResponseUsage>,
+    error: Option<&str>,
+) {
+    let kind = match source {
+        UsageSource::NotRecorded => return,
+        UsageSource::Prompt { .. } => crate::usage::Source::Prompt,
+        UsageSource::Assistant => crate::usage::Source::Assistant,
+        UsageSource::ReminderParse => crate::usage::Source::ReminderParse,
+    };
+    let mut event = crate::usage::UsageEvent::now(kind);
+    if let UsageSource::Prompt { id, name } = source {
+        event.prompt_id = id.clone();
+        event.prompt_name = name.clone();
+    }
+    event.provider = provider_id.to_string();
+    event.model = model.to_string();
+    event.duration_ms = started.elapsed().as_millis().min(u128::from(u32::MAX)) as u32;
+    if let Some(u) = usage {
+        event.input_tokens = u.input_tokens;
+        event.output_tokens = u.output_tokens;
+    }
+    if let Some(message) = error {
+        event.ok = false;
+        // The category only — the message can quote request content.
+        event.error_kind = crate::usage::ErrorKind::classify(message);
+    }
+    crate::usage::record(app, event);
+}
+
 /// Core completion against a SPECIFIC provider with explicit request options.
 /// Uses `build_request_with`, so a provider that ignores options behaves
 /// exactly as before.
+///
+/// Every outcome past the config load is recorded — including failures, which
+/// is the whole point of the Failures tile on the Usage page.
 pub async fn complete_provider_with_options(
     app: &AppHandle,
     provider_id: &str,
     prompt: &str,
     opts: RequestOptions,
+    source: UsageSource,
 ) -> Result<String, String> {
     let settings = crate::config::load(app)?;
     let p = provider(provider_id)?;
+    let cfg = settings.ai.provider(provider_id)?;
     let key = crate::secrets::get(provider_id)?;
-    if p.requires_api_key() && key.is_none() {
-        return Err(format!(
-            "No API key configured for {provider_id} — add one on the Providers page"
-        ));
-    }
-    let req = p.build_request_with(
-        settings.ai.provider(provider_id)?,
-        key.as_deref(),
-        prompt,
-        opts,
-    )?;
-    let body = send(req).await?;
-    p.parse_response(&body)
+    let started = std::time::Instant::now();
+
+    // Usage survives a `parse_response` failure: the provider still billed the
+    // tokens even when we couldn't read the answer.
+    let mut usage: Option<ResponseUsage> = None;
+    let built = if p.requires_api_key() && key.is_none() {
+        Err(format!("No API key configured for {provider_id} — add one on the Providers page"))
+    } else {
+        p.build_request_with(cfg, key.as_deref(), prompt, opts)
+    };
+    let outcome = match built {
+        Err(e) => Err(e),
+        Ok(req) => match send(req).await {
+            Err(e) => Err(e),
+            Ok(body) => {
+                usage = p.parse_usage(&body);
+                p.parse_response(&body)
+            }
+        },
+    };
+
+    record_usage(
+        app,
+        &source,
+        provider_id,
+        &effective_model(p, &cfg.model, usage.as_ref().and_then(|u| u.model.as_deref())),
+        started,
+        usage.as_ref(),
+        outcome.as_ref().err().map(String::as_str),
+    );
+    outcome
 }
 
 /// Full completion against a SPECIFIC provider (Task 4's `test_provider`
 /// uses this directly). No request options — plain behavior.
-pub async fn complete_with(app: &AppHandle, provider_id: &str, prompt: &str) -> Result<String, String> {
-    complete_provider_with_options(app, provider_id, prompt, RequestOptions::default()).await
+pub async fn complete_with(
+    app: &AppHandle,
+    provider_id: &str,
+    prompt: &str,
+    source: UsageSource,
+) -> Result<String, String> {
+    complete_provider_with_options(app, provider_id, prompt, RequestOptions::default(), source)
+        .await
 }
 
 /// Full completion against the ACTIVE provider from settings.
-pub async fn complete(app: &AppHandle, prompt: &str) -> Result<String, String> {
+pub async fn complete(
+    app: &AppHandle,
+    prompt: &str,
+    source: UsageSource,
+) -> Result<String, String> {
     let id = crate::config::load(app)?.ai.active_provider;
-    complete_with(app, &id, prompt).await
+    complete_with(app, &id, prompt, source).await
 }
 
 /// Full completion against the ACTIVE provider honoring request options
@@ -196,9 +339,10 @@ pub async fn complete_with_options(
     app: &AppHandle,
     prompt: &str,
     opts: RequestOptions,
+    source: UsageSource,
 ) -> Result<String, String> {
     let id = crate::config::load(app)?.ai.active_provider;
-    complete_provider_with_options(app, &id, prompt, opts).await
+    complete_provider_with_options(app, &id, prompt, opts, source).await
 }
 
 /// Whether the ACTIVE provider offers native web search (assistant uses this
@@ -224,7 +368,9 @@ pub fn active_provider_supports_images(app: AppHandle) -> Result<bool, String> {
 /// that proves endpoint + key + model all work.
 #[tauri::command]
 pub async fn test_provider(app: AppHandle, provider_id: String) -> Result<String, String> {
-    complete_with(&app, &provider_id, "Reply with exactly: OK").await
+    // NotRecorded: a connection test is plumbing, not usage — counting it
+    // would inflate the run count every time you visit the Providers page.
+    complete_with(&app, &provider_id, "Reply with exactly: OK", UsageSource::NotRecorded).await
 }
 
 #[cfg(test)]
@@ -309,6 +455,55 @@ mod tests {
         assert_eq!(non_empty_system(&empty), None);
         let set = RequestOptions { system: Some(" Be brief.\nUse lists. ".into()), ..Default::default() };
         assert_eq!(non_empty_system(&set), Some("Be brief.\nUse lists."));
+    }
+
+    #[test]
+    fn usage_from_reads_both_counts_and_the_model() {
+        let u = usage_from(
+            r#"{"usage":{"input_tokens":412,"output_tokens":96},"model":"claude-sonnet-5"}"#,
+            "/usage/input_tokens",
+            "/usage/output_tokens",
+            "/model",
+        )
+        .unwrap();
+        assert_eq!(u.input_tokens, 412);
+        assert_eq!(u.output_tokens, 96);
+        assert_eq!(u.model.as_deref(), Some("claude-sonnet-5"));
+    }
+
+    #[test]
+    fn usage_from_is_none_when_the_provider_reports_nothing() {
+        // No usage block at all (many local OpenAI-compatible servers), a body
+        // that isn't JSON, and an empty model string must all degrade quietly.
+        assert!(usage_from(r#"{"choices":[]}"#, "/usage/a", "/usage/b", "/model").is_none());
+        assert!(usage_from("not json", "/usage/a", "/usage/b", "/model").is_none());
+        let no_model = usage_from(r#"{"usage":{"a":1},"model":""}"#, "/usage/a", "/usage/b", "/model")
+            .unwrap();
+        assert_eq!(no_model.model, None, "an empty model must not be recorded as one");
+        assert_eq!(no_model.output_tokens, 0, "a missing count is zero, not a failure");
+    }
+
+    #[test]
+    fn every_provider_reports_a_default_model_and_ignores_garbage_bodies() {
+        for id in crate::config::PROVIDER_IDS {
+            let p = provider(id).unwrap();
+            assert!(!p.default_model().is_empty(), "{id} has no default model");
+            assert!(p.parse_usage("").is_none(), "{id} choked on an empty body");
+            assert!(p.parse_usage("<html>502</html>").is_none(), "{id} choked on HTML");
+            assert!(p.parse_usage("{}").is_none(), "{id} invented usage from an empty object");
+        }
+    }
+
+    #[test]
+    fn effective_model_prefers_what_the_provider_reported() {
+        let p = provider("anthropic").unwrap();
+        // A gateway resolving an alias to a dated id — that's what gets billed.
+        assert_eq!(effective_model(p, "claude-sonnet-5", Some("claude-sonnet-5-20260514")), "claude-sonnet-5-20260514");
+        // Nothing reported: fall back to the configured model...
+        assert_eq!(effective_model(p, "claude-opus-5", None), "claude-opus-5");
+        // ...and with no configured model, the provider's own default.
+        assert_eq!(effective_model(p, "", None), anthropic::DEFAULT_MODEL);
+        assert_eq!(effective_model(p, "  ", Some("  ")), anthropic::DEFAULT_MODEL);
     }
 
     #[tokio::test]

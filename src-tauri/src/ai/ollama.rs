@@ -34,6 +34,17 @@ impl AiProvider for Ollama {
         })
     }
 
+    fn default_model(&self) -> &'static str {
+        DEFAULT_MODEL
+    }
+
+    /// Ollama names them `prompt_eval_count` / `eval_count` at the top level.
+    /// Tokens are tracked for parity with the cloud providers; cost is always
+    /// $0 because the model runs on this machine.
+    fn parse_usage(&self, body: &str) -> Option<super::ResponseUsage> {
+        super::usage_from(body, "/prompt_eval_count", "/eval_count", "/model")
+    }
+
     /// Ollama vision support is per-model. The default `llama3.2` is text-only,
     /// so we allow images only when the model name carries a known vision tag.
     /// Conservative by design: the assistant blocks attachments otherwise.
@@ -110,6 +121,28 @@ mod tests {
         let body = r#"{"message":{"role":"assistant","content":" Hello "},"done":true}"#;
         assert_eq!(Ollama.parse_response(body).unwrap(), "Hello");
         assert!(Ollama.parse_response("{}").is_err());
+    }
+
+    #[test]
+    fn parses_eval_counts_as_token_usage() {
+        let body = r#"{
+            "model":"llama3.2",
+            "message":{"role":"assistant","content":"Hi"},
+            "done":true,
+            "prompt_eval_count":26,
+            "eval_count":298
+        }"#;
+        let u = Ollama.parse_usage(body).unwrap();
+        assert_eq!(u.input_tokens, 26);
+        assert_eq!(u.output_tokens, 298);
+        assert_eq!(u.model.as_deref(), Some("llama3.2"));
+    }
+
+    #[test]
+    fn a_response_without_eval_counts_yields_no_usage() {
+        let body = r#"{"message":{"role":"assistant","content":"Hi"},"done":true}"#;
+        assert!(Ollama.parse_usage(body).is_none());
+        assert_eq!(Ollama.parse_response(body).unwrap(), "Hi");
     }
 
     #[test]

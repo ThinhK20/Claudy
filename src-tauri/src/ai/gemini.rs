@@ -33,6 +33,23 @@ impl AiProvider for Gemini {
         })
     }
 
+    fn default_model(&self) -> &'static str {
+        DEFAULT_MODEL
+    }
+
+    /// generateContent returns `usageMetadata` and echoes the resolved model as
+    /// `modelVersion` (a dated alias resolves to its concrete version). Thinking
+    /// models also report `thoughtsTokenCount`, which is already counted inside
+    /// `candidatesTokenCount`.
+    fn parse_usage(&self, body: &str) -> Option<super::ResponseUsage> {
+        super::usage_from(
+            body,
+            "/usageMetadata/promptTokenCount",
+            "/usageMetadata/candidatesTokenCount",
+            "/modelVersion",
+        )
+    }
+
     fn supports_web_search(&self) -> bool {
         true
     }
@@ -129,6 +146,26 @@ mod tests {
             {"text":"was 3-1."}
         ]}}]}"#;
         assert_eq!(Gemini.parse_response(multi).unwrap(), "The score was 3-1.");
+    }
+
+    #[test]
+    fn parses_usage_metadata_and_the_resolved_model_version() {
+        let body = r#"{
+            "candidates":[{"content":{"parts":[{"text":"Hi"}]}}],
+            "usageMetadata":{"promptTokenCount":18,"candidatesTokenCount":5,"totalTokenCount":23},
+            "modelVersion":"gemini-2.5-flash"
+        }"#;
+        let u = Gemini.parse_usage(body).unwrap();
+        assert_eq!(u.input_tokens, 18);
+        assert_eq!(u.output_tokens, 5);
+        assert_eq!(u.model.as_deref(), Some("gemini-2.5-flash"));
+    }
+
+    #[test]
+    fn missing_usage_metadata_yields_no_usage() {
+        let body = r#"{"candidates":[{"content":{"parts":[{"text":"Hi"}]}}]}"#;
+        assert!(Gemini.parse_usage(body).is_none());
+        assert_eq!(Gemini.parse_response(body).unwrap(), "Hi");
     }
 
     #[test]
