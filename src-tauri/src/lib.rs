@@ -17,6 +17,7 @@ mod shortcuts;
 mod stt;
 mod tray;
 mod tts;
+mod usage;
 mod wake;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -45,6 +46,7 @@ pub fn run() {
         .manage(prompt_flow::PromptFlowState::default())
         .manage(shortcuts::PromptShortcuts::default())
         .manage(wake::WakeState::default())
+        .manage(usage::UsageState::default())
         .invoke_handler(tauri::generate_handler![
             config::get_settings,
             config::update_settings,
@@ -93,7 +95,10 @@ pub fn run() {
             reminders::snooze_reminder,
             reminders::complete_reminder,
             wake::wake_word_listening,
-            wake::check_wake_phrase
+            wake::check_wake_phrase,
+            usage::usage_summary,
+            usage::clear_usage,
+            usage::list_model_prices
         ])
         .setup(|app| {
             tray::create(app.handle())?;

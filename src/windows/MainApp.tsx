@@ -7,6 +7,7 @@ import PromptsPage from "@/pages/PromptsPage";
 import TranscriptionPage from "@/pages/TranscriptionPage";
 import AssistantSettingsPage from "@/pages/AssistantSettingsPage";
 import RemindersPage from "@/pages/RemindersPage";
+import UsagePage from "@/pages/UsagePage";
 import ProvidersPage from "@/pages/ProvidersPage";
 import SettingsPage from "@/pages/SettingsPage";
 
@@ -15,6 +16,7 @@ const PAGES: Record<PageKey, React.ComponentType> = {
   transcription: TranscriptionPage,
   assistant: AssistantSettingsPage,
   reminders: RemindersPage,
+  usage: UsagePage,
   providers: ProvidersPage,
   settings: SettingsPage,
 };

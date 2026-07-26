@@ -99,6 +99,27 @@ impl Default for AssistantSettings {
     }
 }
 
+/// Local usage log (Usage page). Recording is on by default: the log never
+/// leaves this machine and holds metadata only — no prompt text, no selected
+/// text, no answers. Turn it off or clear it from Settings.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct UsageSettings {
+    pub enabled: bool,
+    /// Events older than this are dropped on the next write. 0 = keep
+    /// forever (a hard cap of `usage::MAX_EVENTS` still applies).
+    pub retention_days: u32,
+    /// Per-model price overrides for the cost estimate. Empty = use the
+    /// bundled table.
+    pub model_prices: Vec<crate::usage::ModelPrice>,
+}
+
+impl Default for UsageSettings {
+    fn default() -> Self {
+        Self { enabled: true, retention_days: 90, model_prices: Vec::new() }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Settings {
@@ -118,6 +139,7 @@ pub struct Settings {
     pub models_dir_override: String, // "" = default project models/ dir
     pub ai: AiSettings,
     pub assistant: AssistantSettings,
+    pub usage: UsageSettings,
 }
 
 impl Default for Settings {
@@ -137,6 +159,7 @@ impl Default for Settings {
             models_dir_override: String::new(),
             ai: AiSettings::default(),
             assistant: AssistantSettings::default(),
+            usage: UsageSettings::default(),
         }
     }
 }
@@ -369,6 +392,39 @@ mod tests {
         let v = serde_json::to_value(&s).unwrap();
         assert_eq!(v["assistant"]["wakeWord"]["phrase"], "ok computer");
         assert!(v["assistant"]["wakeWord"].get("sensitivity").is_some());
+    }
+
+    #[test]
+    fn settings_written_before_usage_stats_load_with_recording_on_and_90_day_retention() {
+        // No migration: the block is simply absent in existing settings.json.
+        let s: Settings = serde_json::from_value(serde_json::json!({ "theme": "dark" })).unwrap();
+        assert_eq!(s.usage, UsageSettings::default());
+        assert!(s.usage.enabled);
+        assert_eq!(s.usage.retention_days, 90);
+        assert!(s.usage.model_prices.is_empty());
+        assert_eq!(s.theme, "dark", "the rest of the settings must survive");
+    }
+
+    #[test]
+    fn usage_settings_round_trip_camel_case_and_fill_missing_with_defaults() {
+        let json = serde_json::json!({
+            "usage": {
+                "enabled": false,
+                "modelPrices": [
+                    { "model": "my-deployment", "inputPerMtok": 7.0, "outputPerMtok": 9.0 }
+                ]
+            }
+        });
+        let s: Settings = serde_json::from_value(json).unwrap();
+        assert!(!s.usage.enabled);
+        assert_eq!(s.usage.retention_days, 90, "missing nested field -> default");
+        assert_eq!(s.usage.model_prices[0].model, "my-deployment");
+        assert_eq!(s.usage.model_prices[0].output_per_mtok, 9.0);
+
+        let v = serde_json::to_value(&s).unwrap();
+        assert!(v["usage"].get("retentionDays").is_some());
+        assert!(v["usage"].get("retention_days").is_none());
+        assert!(v["usage"]["modelPrices"][0].get("inputPerMtok").is_some());
     }
 
     #[test]

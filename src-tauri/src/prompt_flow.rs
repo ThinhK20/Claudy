@@ -95,7 +95,10 @@ async fn run(app: &AppHandle, prompt_id: &str) {
     // Provider calls take seconds; without this the user stares at nothing.
     notify::send(app, notif, &format!("Running \"{}\"…", prompt.name));
 
-    let result = match ai::complete(app, &rendered).await {
+    // The name is snapshotted into the usage log so a later rename or delete
+    // doesn't turn the stats row into a bare id.
+    let attribution = ai::UsageSource::Prompt { id: prompt.id.clone(), name: prompt.name.clone() };
+    let result = match ai::complete(app, &rendered, attribution).await {
         Ok(r) => r,
         Err(e) => {
             notify::send(app, notif, &format!("\"{}\" failed: {e}", prompt.name));

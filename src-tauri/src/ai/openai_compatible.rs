@@ -40,6 +40,17 @@ impl AiProvider for OpenAiCompatible {
         })
     }
 
+    fn default_model(&self) -> &'static str {
+        DEFAULT_MODEL
+    }
+
+    /// `usage.prompt_tokens` / `usage.completion_tokens` is the OpenAI shape.
+    /// Local servers (LM Studio, llama.cpp) often omit the block entirely —
+    /// that yields `None` and the run is logged without token counts.
+    fn parse_usage(&self, body: &str) -> Option<super::ResponseUsage> {
+        super::usage_from(body, "/usage/prompt_tokens", "/usage/completion_tokens", "/model")
+    }
+
     /// OpenAI chat models take images via `image_url` parts; the default
     /// `gpt-4o-mini` is vision-capable. This provider also fronts arbitrary
     /// OpenAI-compatible gateways, so we optimistically allow images and let a
@@ -116,6 +127,27 @@ mod tests {
             .unwrap();
         assert_eq!(req.url, "http://localhost:1234/v1/chat/completions");
         assert!(req.headers.is_empty());
+    }
+
+    #[test]
+    fn parses_usage_from_a_chat_completions_response() {
+        let body = r#"{
+            "model":"gpt-4o-mini-2026-01-01",
+            "choices":[{"message":{"role":"assistant","content":"Hi"}}],
+            "usage":{"prompt_tokens":31,"completion_tokens":7,"total_tokens":38}
+        }"#;
+        let u = OpenAiCompatible.parse_usage(body).unwrap();
+        assert_eq!(u.input_tokens, 31);
+        assert_eq!(u.output_tokens, 7);
+        assert_eq!(u.model.as_deref(), Some("gpt-4o-mini-2026-01-01"));
+    }
+
+    #[test]
+    fn a_keyless_local_server_omitting_usage_still_answers() {
+        // LM Studio / llama.cpp frequently drop the usage block entirely.
+        let body = r#"{"choices":[{"message":{"role":"assistant","content":"Hi"}}]}"#;
+        assert!(OpenAiCompatible.parse_usage(body).is_none());
+        assert_eq!(OpenAiCompatible.parse_response(body).unwrap(), "Hi");
     }
 
     #[test]

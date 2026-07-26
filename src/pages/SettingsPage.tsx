@@ -14,14 +14,35 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
+import { Button } from "@/components/ui/button";
 import { ShortcutInput } from "@/components/shortcut-input";
 import { ToggleRow } from "@/components/toggle-row";
 import { useSettings, type Settings } from "@/lib/settings-store";
+import { clearUsage } from "@/lib/usage-api";
 
 const THEMES: { value: Settings["theme"]; label: string }[] = [
   { value: "system", label: "System" },
   { value: "light", label: "Light" },
   { value: "dark", label: "Dark" },
+];
+
+/** 0 = keep forever; a hard cap on the number of entries still applies. */
+const RETENTIONS: { value: number; label: string }[] = [
+  { value: 30, label: "30 days" },
+  { value: 90, label: "90 days" },
+  { value: 365, label: "1 year" },
+  { value: 0, label: "Forever" },
 ];
 
 const DICTATION_MODES: { value: Settings["dictationMode"]; label: string }[] = [
@@ -170,6 +191,82 @@ export default function SettingsPage() {
             checked={settings.startMinimized}
             onChange={(v) => void safeUpdate({ startMinimized: v })}
           />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Usage stats</CardTitle>
+          <CardDescription>
+            A local record of what you run, behind the Usage page. It stays on this
+            computer and stores metadata only — never your prompts, the text you
+            select, or the answers.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-5">
+          <ToggleRow
+            label="Record usage stats"
+            description="Log each run's time, prompt name, model, token counts and outcome"
+            checked={settings.usage.enabled}
+            onChange={(v) => void safeUpdate({ usage: { ...settings.usage, enabled: v } })}
+          />
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <Label>Keep history for</Label>
+              <p className="text-muted-foreground text-sm">
+                Older entries are deleted automatically
+              </p>
+            </div>
+            <Select
+              value={String(settings.usage.retentionDays)}
+              onValueChange={(v) =>
+                void safeUpdate({ usage: { ...settings.usage, retentionDays: Number(v) } })
+              }
+            >
+              <SelectTrigger className="w-36">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {RETENTIONS.map((r) => (
+                  <SelectItem key={r.value} value={String(r.value)}>
+                    {r.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <Label>Clear history</Label>
+              <p className="text-muted-foreground text-sm">
+                Delete everything recorded so far
+              </p>
+            </div>
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button variant="outline">Clear all</Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Clear usage history?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    Every recorded run is deleted and the Usage page starts from
+                    empty. This can't be undone.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogAction
+                    onClick={() => {
+                      void clearUsage().catch((e: unknown) => setError(String(e)));
+                    }}
+                  >
+                    Clear all
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          </div>
         </CardContent>
       </Card>
     </div>

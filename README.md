@@ -66,6 +66,12 @@ Built with Tauri 2 and React. Windows-first — macOS and Linux code paths exist
 - Anything that came due while Claudy was closed notifies as soon as you start it, marked overdue
 - The **Reminders** page lists everything: snooze, mark done, edit the time, or add one by hand
 
+### Usage stats
+- A **Usage** page shows how many prompts you ran per day, which ones you use most, how many tokens went in and out, and roughly what it cost
+- Cost comes from a built-in price list per model, and every price is editable — so a provider's change, or a model Claudy hasn't heard of, is a one-line fix. Models running on your own machine (Ollama) count as free, and a model with no price shows its tokens rather than a made-up figure
+- The log lives on your computer and holds **facts about runs only** — the time, the prompt's name, which service and model, token counts, and whether it worked. Never your prompts, the text you selected, or the answers
+- On by default, kept for 90 days. Turn it off or delete everything under Settings → Usage stats
+
 ### App
 - Lives in the system tray; closing the window hides the app instead of quitting it
 - Settings for shortcuts (with a recorder and conflict warnings), light/dark theme, starting with Windows, and auto-paste
@@ -127,7 +133,12 @@ models/             Locally downloaded Whisper models (gitignored)
 
 ## Privacy
 
-- Zero telemetry
+- Zero telemetry — nothing is reported to us or to anyone else, ever
+- The Usage page is the one thing Claudy writes down about you, and it stays on
+  your computer. It records metadata per run: time, prompt name, service, model,
+  token counts, duration, and success or failure. It never records your prompts,
+  the text you select, the answers, or provider error messages. Switch it off or
+  erase it under Settings → Usage stats
 - Dictation audio is processed in-memory and never leaves your machine
 - The wake word is off until you turn it on. While it listens, it keeps only the
   last couple of seconds of audio in memory, recognises them on your machine, and

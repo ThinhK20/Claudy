@@ -288,7 +288,8 @@ pub fn ask(app: &AppHandle, question: String, images: Vec<ai::ImageAttachment>) 
     let opts = ai::RequestOptions { web_search, system, images };
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        let result = ai::complete_with_options(&app, &question, opts).await;
+        let result =
+            ai::complete_with_options(&app, &question, opts, ai::UsageSource::Assistant).await;
         if current_generation(&app) != generation {
             return; // superseded by a newer question or a close
         }

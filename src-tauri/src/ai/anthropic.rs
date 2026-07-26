@@ -43,6 +43,17 @@ impl AiProvider for Anthropic {
         })
     }
 
+    fn default_model(&self) -> &'static str {
+        DEFAULT_MODEL
+    }
+
+    /// Messages API reports `usage.input_tokens` / `usage.output_tokens`
+    /// alongside the model it served. Web-search requests bill the extra
+    /// searches separately; those aren't token counts and aren't tracked.
+    fn parse_usage(&self, body: &str) -> Option<super::ResponseUsage> {
+        super::usage_from(body, "/usage/input_tokens", "/usage/output_tokens", "/model")
+    }
+
     fn supports_web_search(&self) -> bool {
         true
     }
@@ -155,6 +166,28 @@ mod tests {
             {"type":"text","text":"was 3-1."}
         ]}"#;
         assert_eq!(Anthropic.parse_response(web).unwrap(), "The score was 3-1.");
+    }
+
+    #[test]
+    fn parses_usage_from_a_messages_response() {
+        let body = r#"{
+            "model":"claude-sonnet-5-20260514",
+            "content":[{"type":"text","text":"Hello"}],
+            "usage":{"input_tokens":412,"output_tokens":96}
+        }"#;
+        let u = Anthropic.parse_usage(body).unwrap();
+        assert_eq!(u.input_tokens, 412);
+        assert_eq!(u.output_tokens, 96);
+        assert_eq!(u.model.as_deref(), Some("claude-sonnet-5-20260514"));
+        // The text parse must be unaffected by reading usage.
+        assert_eq!(Anthropic.parse_response(body).unwrap(), "Hello");
+    }
+
+    #[test]
+    fn missing_usage_block_yields_no_usage_but_still_parses_the_answer() {
+        let body = r#"{"content":[{"type":"text","text":"Hi"}]}"#;
+        assert!(Anthropic.parse_usage(body).is_none());
+        assert_eq!(Anthropic.parse_response(body).unwrap(), "Hi");
     }
 
     #[test]
