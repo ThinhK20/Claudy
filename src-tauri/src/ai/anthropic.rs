@@ -87,6 +87,9 @@ impl AiProvider for Anthropic {
             }
             req.body["messages"][0]["content"] = serde_json::Value::Array(content);
         }
+        // After the image rewrite (which addresses the current message at
+        // index 0) and before the system field, which is top-level here.
+        super::prepend_history(&mut req.body, &opts.history);
         if opts.web_search {
             // Server-side web search tool; Claude runs the searches itself and
             // folds results into the answer. `max_uses` bounds cost/latency.
@@ -273,6 +276,89 @@ mod tests {
         assert_eq!(content[1]["source"]["type"], "base64");
         assert_eq!(content[1]["source"]["media_type"], "image/png");
         assert_eq!(content[1]["source"]["data"], "BASE64DATA");
+    }
+
+    /// Two prior turns in the shape `assistant::conversation` produces.
+    fn history() -> Vec<super::super::HistoryTurn> {
+        use super::super::{HistoryTurn, Role};
+        vec![
+            HistoryTurn { role: Role::User, content: "What is Tauri?".into() },
+            HistoryTurn { role: Role::Assistant, content: "A desktop framework.".into() },
+        ]
+    }
+
+    #[test]
+    fn history_is_prepended_before_the_current_user_message() {
+        let cfg = ProviderSettings::default();
+        let req = Anthropic
+            .build_request_with(
+                &cfg,
+                Some("k"),
+                "How does it compare?",
+                super::super::RequestOptions { history: history(), ..Default::default() },
+            )
+            .unwrap();
+        let msgs = req.body["messages"].as_array().unwrap();
+        assert_eq!(msgs.len(), 3);
+        assert_eq!(msgs[0]["role"], "user");
+        assert_eq!(msgs[0]["content"], "What is Tauri?");
+        assert_eq!(msgs[1]["role"], "assistant");
+        assert_eq!(msgs[1]["content"], "A desktop framework.");
+        assert_eq!(msgs[2]["role"], "user");
+        assert_eq!(msgs[2]["content"], "How does it compare?");
+    }
+
+    #[test]
+    fn history_keeps_image_blocks_on_the_current_message() {
+        // The regression the images-then-history ordering exists for: attaching
+        // the picture to the OLDEST turn instead of the one being asked.
+        let cfg = ProviderSettings::default();
+        let opts = super::super::RequestOptions {
+            history: history(),
+            images: vec![super::super::ImageAttachment {
+                media_type: "image/png".into(),
+                data: "BASE64DATA".into(),
+            }],
+            ..Default::default()
+        };
+        let req = Anthropic.build_request_with(&cfg, Some("k"), "What is this?", opts).unwrap();
+        let msgs = req.body["messages"].as_array().unwrap();
+        assert_eq!(msgs.len(), 3);
+        assert!(msgs[0]["content"].is_string(), "history must stay plain text");
+        let current = &msgs[2]["content"];
+        assert_eq!(current[0]["text"], "What is this?");
+        assert_eq!(current[1]["source"]["data"], "BASE64DATA");
+    }
+
+    #[test]
+    fn history_and_system_coexist() {
+        let cfg = ProviderSettings::default();
+        let req = Anthropic
+            .build_request_with(
+                &cfg,
+                Some("k"),
+                "Hi",
+                super::super::RequestOptions {
+                    history: history(),
+                    system: Some("Be brief.".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        // The system prompt is a top-level field here, so it never competes
+        // with history for a message slot.
+        assert_eq!(req.body["system"], "Be brief.");
+        assert_eq!(req.body["messages"].as_array().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn empty_history_leaves_the_body_unchanged() {
+        let cfg = ProviderSettings::default();
+        let plain = Anthropic.build_request(&cfg, Some("k"), "Hi").unwrap();
+        let with = Anthropic
+            .build_request_with(&cfg, Some("k"), "Hi", super::super::RequestOptions::default())
+            .unwrap();
+        assert_eq!(plain.body, with.body);
     }
 
     #[test]

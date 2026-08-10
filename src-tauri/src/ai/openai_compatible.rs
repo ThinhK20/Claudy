@@ -67,10 +67,13 @@ impl AiProvider for OpenAiCompatible {
         opts: super::RequestOptions,
     ) -> Result<HttpRequest, String> {
         let mut req = self.build_request(cfg, api_key, prompt)?;
+        // Order is load-bearing: images address the current message at index 0,
+        // history goes in front of it, and the system message must end up first
+        // of all.
         if !opts.images.is_empty() {
             // Rewrite the user message content as a parts array: text, then one
             // `image_url` part per attachment using an inline data URL. Done
-            // before the system insert so the user message stays at index 0.
+            // first, while the user message is still at index 0.
             let mut content = vec![serde_json::json!({ "type": "text", "text": prompt })];
             for img in &opts.images {
                 content.push(serde_json::json!({
@@ -80,6 +83,7 @@ impl AiProvider for OpenAiCompatible {
             }
             req.body["messages"][0]["content"] = serde_json::Value::Array(content);
         }
+        super::prepend_history(&mut req.body, &opts.history);
         if let Some(system) = super::non_empty_system(&opts) {
             if let Some(messages) = req.body["messages"].as_array_mut() {
                 messages.insert(0, serde_json::json!({ "role": "system", "content": system }));
@@ -232,5 +236,67 @@ mod tests {
         assert_eq!(req.body["messages"][1]["role"], "user");
         assert_eq!(req.body["messages"][1]["content"][0]["text"], "Hi");
         assert_eq!(req.body["messages"][1]["content"][1]["type"], "image_url");
+    }
+
+    /// Two prior turns in the shape `assistant::conversation` produces.
+    fn history() -> Vec<super::super::HistoryTurn> {
+        use super::super::{HistoryTurn, Role};
+        vec![
+            HistoryTurn { role: Role::User, content: "What is Tauri?".into() },
+            HistoryTurn { role: Role::Assistant, content: "A desktop framework.".into() },
+        ]
+    }
+
+    #[test]
+    fn history_is_prepended_and_the_system_message_stays_first() {
+        let req = OpenAiCompatible
+            .build_request_with(
+                &cfg("", ""),
+                None,
+                "How does it compare?",
+                super::super::RequestOptions {
+                    history: history(),
+                    system: Some("Be brief.".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let roles: Vec<&str> = req.body["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| m["role"].as_str().unwrap())
+            .collect();
+        assert_eq!(roles, ["system", "user", "assistant", "user"]);
+        assert_eq!(req.body["messages"][1]["content"], "What is Tauri?");
+        assert_eq!(req.body["messages"][3]["content"], "How does it compare?");
+    }
+
+    #[test]
+    fn history_keeps_image_parts_on_the_current_message() {
+        let opts = super::super::RequestOptions {
+            history: history(),
+            images: vec![super::super::ImageAttachment {
+                media_type: "image/png".into(),
+                data: "X".into(),
+            }],
+            ..Default::default()
+        };
+        let req = OpenAiCompatible.build_request_with(&cfg("", ""), None, "What is this?", opts).unwrap();
+        let msgs = req.body["messages"].as_array().unwrap();
+        assert_eq!(msgs.len(), 3);
+        assert!(msgs[0]["content"].is_string(), "history must stay plain text");
+        assert_eq!(msgs[2]["content"][0]["text"], "What is this?");
+        assert_eq!(msgs[2]["content"][1]["type"], "image_url");
+    }
+
+    #[test]
+    fn empty_history_leaves_the_body_unchanged() {
+        let c = cfg("", "");
+        let plain = OpenAiCompatible.build_request(&c, None, "Hi").unwrap();
+        let with = OpenAiCompatible
+            .build_request_with(&c, None, "Hi", super::super::RequestOptions::default())
+            .unwrap();
+        assert_eq!(plain.body, with.body);
     }
 }

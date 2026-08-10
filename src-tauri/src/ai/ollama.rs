@@ -65,6 +65,9 @@ impl AiProvider for Ollama {
         opts: super::RequestOptions,
     ) -> Result<HttpRequest, String> {
         let mut req = self.build_request(cfg, api_key, prompt)?;
+        // Order is load-bearing: images address the current message at index 0,
+        // history goes in front of it, and the system message must end up first
+        // of all.
         if !opts.images.is_empty() {
             // Ollama takes images as a message-level array of bare base64
             // strings (no data-URI prefix); the text content stays a string.
@@ -75,6 +78,7 @@ impl AiProvider for Ollama {
                 .collect();
             req.body["messages"][0]["images"] = serde_json::Value::Array(imgs);
         }
+        super::prepend_history(&mut req.body, &opts.history);
         if let Some(system) = super::non_empty_system(&opts) {
             if let Some(messages) = req.body["messages"].as_array_mut() {
                 messages.insert(0, serde_json::json!({ "role": "system", "content": system }));
@@ -194,5 +198,71 @@ mod tests {
         let req = Ollama.build_request_with(&cfg, None, "Hi", opts).unwrap();
         assert_eq!(req.body["messages"][0]["content"], "Hi", "content stays a string");
         assert_eq!(req.body["messages"][0]["images"][0], "RAWB64");
+    }
+
+    /// Two prior turns in the shape `assistant::conversation` produces.
+    fn history() -> Vec<super::super::HistoryTurn> {
+        use super::super::{HistoryTurn, Role};
+        vec![
+            HistoryTurn { role: Role::User, content: "What is Tauri?".into() },
+            HistoryTurn { role: Role::Assistant, content: "A desktop framework.".into() },
+        ]
+    }
+
+    #[test]
+    fn history_is_prepended_and_images_stay_on_the_current_message() {
+        let cfg = ProviderSettings::default();
+        let opts = super::super::RequestOptions {
+            history: history(),
+            images: vec![super::super::ImageAttachment {
+                media_type: "image/png".into(),
+                data: "RAWB64".into(),
+            }],
+            ..Default::default()
+        };
+        let req = Ollama.build_request_with(&cfg, None, "What is this?", opts).unwrap();
+        let msgs = req.body["messages"].as_array().unwrap();
+        assert_eq!(msgs.len(), 3);
+        assert_eq!(msgs[0]["content"], "What is Tauri?");
+        assert_eq!(msgs[1]["role"], "assistant");
+        assert!(msgs[0].get("images").is_none(), "history must not carry images");
+        assert_eq!(msgs[2]["content"], "What is this?");
+        assert_eq!(msgs[2]["images"][0], "RAWB64");
+    }
+
+    #[test]
+    fn stream_flag_and_model_survive_history() {
+        let cfg = ProviderSettings { base_url: String::new(), model: "phi3".into() };
+        let req = Ollama
+            .build_request_with(
+                &cfg,
+                None,
+                "Hi",
+                super::super::RequestOptions {
+                    history: history(),
+                    system: Some("Be brief.".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(req.body["stream"], false);
+        assert_eq!(req.body["model"], "phi3");
+        let roles: Vec<&str> = req.body["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| m["role"].as_str().unwrap())
+            .collect();
+        assert_eq!(roles, ["system", "user", "assistant", "user"]);
+    }
+
+    #[test]
+    fn empty_history_leaves_the_body_unchanged() {
+        let cfg = ProviderSettings::default();
+        let plain = Ollama.build_request(&cfg, None, "Hi").unwrap();
+        let with = Ollama
+            .build_request_with(&cfg, None, "Hi", super::super::RequestOptions::default())
+            .unwrap();
+        assert_eq!(plain.body, with.body);
     }
 }

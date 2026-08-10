@@ -105,6 +105,7 @@ describe("labels", () => {
   test("every known source has a human name", () => {
     expect(sourceLabel("prompt")).toBe("Prompt shortcuts");
     expect(sourceLabel("assistant")).toBe("Quick-ask assistant");
+    expect(sourceLabel("assistantSummary")).toBe("Quick Chat memory");
     expect(sourceLabel("reminderParse")).toBe("Reminder time parsing");
     expect(sourceLabel("reminderCreated")).toBe("Reminders created");
     expect(sourceLabel("reminderFired")).toBe("Reminders fired");

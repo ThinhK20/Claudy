@@ -23,9 +23,37 @@ pub struct ImageAttachment {
     pub data: String,
 }
 
+/// Who said an earlier message. Providers map this onto their own vocabulary —
+/// everyone says "assistant" except Gemini, which says "model".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Role {
+    User,
+    Assistant,
+}
+
+impl Role {
+    /// Wire value for the three OpenAI-shaped providers.
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::Assistant => "assistant",
+        }
+    }
+}
+
+/// One earlier message replayed for context. Text only, by design: prior
+/// images are represented by a marker (see `assistant::conversation`), so a
+/// long session can never balloon the payload with replayed base64.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HistoryTurn {
+    pub role: Role,
+    pub content: String,
+}
+
 /// Per-request switches that aren't part of the stored provider config.
 /// Kept as a struct so new switches don't churn every call site (web search
-/// in v1, the assistant's custom system prompt in Phase 8, images in Phase 9).
+/// in v1, the assistant's custom system prompt in Phase 8, images in Phase 9,
+/// quick-chat history in Phase 10).
 #[derive(Debug, Clone, Default)]
 pub struct RequestOptions {
     pub web_search: bool,
@@ -35,6 +63,30 @@ pub struct RequestOptions {
     /// Images to send alongside the prompt. Empty = text-only (every existing
     /// caller), so providers keep their bare-string content unchanged.
     pub images: Vec<ImageAttachment>,
+    /// Earlier turns of the current quick-chat session, oldest first, already
+    /// budgeted by `assistant::conversation`. Empty for every other caller,
+    /// and providers then leave the body byte-identical.
+    pub history: Vec<HistoryTurn>,
+}
+
+/// Prepend history to a `{"role","content"}` messages array — anthropic,
+/// openai_compatible and ollama all speak that shape. A no-op on empty history,
+/// which is what keeps those three bodies byte-identical without a session.
+///
+/// Must run AFTER any image rewrite (which addresses the current message at
+/// index 0) and BEFORE the system insert (which must end up at index 0).
+pub(crate) fn prepend_history(body: &mut serde_json::Value, history: &[HistoryTurn]) {
+    if history.is_empty() {
+        return;
+    }
+    let mut messages: Vec<serde_json::Value> = history
+        .iter()
+        .map(|t| serde_json::json!({ "role": t.role.as_str(), "content": t.content }))
+        .collect();
+    if let Some(current) = body["messages"].as_array() {
+        messages.extend(current.iter().cloned());
+    }
+    body["messages"] = serde_json::Value::Array(messages);
 }
 
 /// Shared trim/filter so each provider injects the system prompt only when
@@ -219,6 +271,8 @@ pub async fn send(req: HttpRequest) -> Result<String, String> {
 pub enum UsageSource {
     Prompt { id: String, name: String },
     Assistant,
+    /// The quick-ask assistant folding its own conversation memory.
+    AssistantSummary,
     ReminderParse,
     /// Connection tests and anything else that isn't the user doing work.
     NotRecorded,
@@ -239,6 +293,7 @@ fn record_usage(
         UsageSource::NotRecorded => return,
         UsageSource::Prompt { .. } => crate::usage::Source::Prompt,
         UsageSource::Assistant => crate::usage::Source::Assistant,
+        UsageSource::AssistantSummary => crate::usage::Source::AssistantSummary,
         UsageSource::ReminderParse => crate::usage::Source::ReminderParse,
     };
     let mut event = crate::usage::UsageEvent::now(kind);
@@ -433,6 +488,10 @@ mod tests {
         // build_request shape.
         assert!(RequestOptions::default().system.is_none());
         assert!(RequestOptions::default().images.is_empty());
+        // The third thing the default shape must not change: quick-chat
+        // history. Every non-assistant caller must keep sending single-turn
+        // requests byte-for-byte.
+        assert!(RequestOptions::default().history.is_empty());
         let cfg = crate::config::ProviderSettings {
             base_url: "http://x/v1".into(),
             model: "m".into(),
@@ -445,6 +504,72 @@ mod tests {
                 .unwrap();
             assert_eq!(plain.body, with.body, "{id} body changed with default options");
         }
+    }
+
+    /// Two prior turns, the shape `assistant::conversation` always produces:
+    /// complete user/assistant pairs, oldest first.
+    fn sample_history() -> Vec<HistoryTurn> {
+        vec![
+            HistoryTurn { role: Role::User, content: "What is Tauri?".into() },
+            HistoryTurn { role: Role::Assistant, content: "A desktop framework.".into() },
+        ]
+    }
+
+    #[test]
+    fn prepend_history_is_a_no_op_on_empty_history() {
+        let mut body = serde_json::json!({ "messages": [{ "role": "user", "content": "Hi" }] });
+        let before = body.clone();
+        prepend_history(&mut body, &[]);
+        assert_eq!(body, before, "an empty session must not touch the body");
+    }
+
+    #[test]
+    fn history_never_displaces_the_current_prompt_for_any_provider() {
+        // Whatever each provider does with history, the question the user just
+        // asked must stay LAST — it is the thing being answered.
+        let cfg = crate::config::ProviderSettings {
+            base_url: "http://x/v1".into(),
+            model: "m".into(),
+        };
+        let opts = RequestOptions { history: sample_history(), ..Default::default() };
+        for id in crate::config::PROVIDER_IDS {
+            let req = provider(id)
+                .unwrap()
+                .build_request_with(&cfg, Some("k"), "Hi", opts.clone())
+                .unwrap();
+            // Gemini keeps turns under `contents`; everyone else under `messages`.
+            let turns = req.body["messages"]
+                .as_array()
+                .or_else(|| req.body["contents"].as_array())
+                .unwrap_or_else(|| panic!("{id} has neither messages nor contents"));
+            let last = turns.last().unwrap();
+            let text = last["content"]
+                .as_str()
+                .or_else(|| last["parts"][0]["text"].as_str())
+                .unwrap_or_else(|| panic!("{id} last turn has no text"));
+            assert_eq!(text, "Hi", "{id} displaced the current question");
+            assert_eq!(turns.len(), 3, "{id} should carry 2 history turns + the current one");
+        }
+    }
+
+    #[test]
+    fn history_roles_use_each_providers_vocabulary() {
+        assert_eq!(Role::User.as_str(), "user");
+        assert_eq!(Role::Assistant.as_str(), "assistant");
+
+        // Gemini is the exception: the assistant side is called "model".
+        let cfg = crate::config::ProviderSettings::default();
+        let req = provider("gemini")
+            .unwrap()
+            .build_request_with(
+                &cfg,
+                Some("k"),
+                "Hi",
+                RequestOptions { history: sample_history(), ..Default::default() },
+            )
+            .unwrap();
+        assert_eq!(req.body["contents"][0]["role"], "user");
+        assert_eq!(req.body["contents"][1]["role"], "model");
     }
 
     #[test]

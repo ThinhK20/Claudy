@@ -8,6 +8,7 @@ import {
   Check,
   Copy,
   Loader2,
+  MessagesSquare,
   Mic,
   Paperclip,
   RotateCw,
@@ -28,12 +29,14 @@ import {
   type ListenPhase,
 } from "@/lib/silence-detector";
 import { isEffectivelyEmpty } from "@/lib/transcript";
+import { followUpHint } from "@/lib/assistant-session";
 import {
   activeProviderSupportsImages,
   askAssistant,
   assistantNewQuestion,
   closeAssistant,
   getAssistantPhase,
+  getAssistantTurnCount,
   onAssistantState,
   replayAssistantSpeech,
   resizeAssistantInput,
@@ -108,6 +111,8 @@ function AssistantPanel() {
   // effects below: start the mic, stop on silence, send the transcript.
   const [voiceStage, setVoiceStage] = useState<VoiceStage>("off");
   const [voiceNote, setVoiceNote] = useState<string | null>(null);
+  // Exchanges in the live session. Owned by Rust; this is only the display copy.
+  const [turnCount, setTurnCount] = useState(0);
 
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -115,12 +120,25 @@ function AssistantPanel() {
   const remindMode = mode === "remind";
   const hasAttachments = attachments.length > 0;
   const imagesBlocked = hasAttachments && !supportsImages;
+  const followUp = followUpHint(turnCount, remindMode);
+  // Mid-session the box says what Esc actually does now: it ends the
+  // conversation, not just this popup. One clear end action, stated where the
+  // user is about to press it.
+  const askHint =
+    turnCount > 0
+      ? "Enter to send · same chat · Esc to end"
+      : "Enter to send · Shift+Tab to Remind · Esc to close";
 
   useEffect(() => {
     load().catch(() => {});
     getAssistantPhase().then(setPhase).catch(() => {});
+    // A reloaded webview has missed every event so far; ask for the count once.
+    getAssistantTurnCount().then(setTurnCount).catch(() => {});
     const un = onAssistantState((s) => {
       setPhase(s.phase);
+      // Outside the input-phase reset below on purpose: the session outlives
+      // the ask box, so this has to track every phase.
+      setTurnCount(s.turnCount);
       if (s.question !== null) setQuestion(s.question);
       if (s.answer !== null) setAnswer(s.answer);
       setMessage(s.message);
@@ -159,12 +177,12 @@ function AssistantPanel() {
     return () => cancelAnimationFrame(raf);
   }, [phase, load]);
 
-  // Grow the popup to fit the thumbnail row or the Remind Mode chip, shrink
-  // back when neither is showing.
+  // Grow the popup to fit the thumbnail row, the Remind Mode chip or the
+  // follow-up chip, and shrink back when none is showing.
   useEffect(() => {
     if (phase !== "input") return;
-    void resizeAssistantInput(hasAttachments, remindMode);
-  }, [phase, hasAttachments, remindMode]);
+    void resizeAssistantInput(hasAttachments, remindMode, turnCount > 0);
+  }, [phase, hasAttachments, remindMode, turnCount]);
 
   // Live time preview. Local parse only, so this stays cheap; a stale timer is
   // cleared on every keystroke and when leaving Remind Mode.
@@ -445,6 +463,14 @@ function AssistantPanel() {
               Remind me
             </div>
           )}
+          {/* Shares the Remind Mode label row, never stacks with it — the
+              window is sized for exactly one such row. */}
+          {followUp && (
+            <div className="text-muted-foreground flex items-center gap-1.5 text-[11px] font-medium tracking-wide uppercase">
+              <MessagesSquare className="h-3 w-3" />
+              {followUp}
+            </div>
+          )}
           {hasAttachments && (
             <div className="flex flex-wrap gap-2">
               {attachments.map((a) => (
@@ -495,7 +521,7 @@ function AssistantPanel() {
                   ? "Sending — press any key to edit"
                   : remindMode
                     ? "Enter to save · Shift+Tab to Ask · Esc to close"
-                    : "Enter to send · Shift+Tab to Remind · Esc to close"}
+                    : askHint}
             </span>
             <div className="flex items-center gap-1">
               <input

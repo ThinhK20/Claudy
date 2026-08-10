@@ -87,6 +87,7 @@ pub fn run() {
             assistant::stop_assistant_speech,
             assistant::replay_assistant_speech,
             assistant::get_assistant_state,
+            assistant::get_assistant_turn_count,
             reminders::preview_reminder,
             reminders::create_reminder_from_text,
             reminders::list_reminders,

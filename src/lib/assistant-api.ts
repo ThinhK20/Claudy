@@ -17,6 +17,8 @@ export interface AssistantState {
   ttsError: string | null;
   /** The wake word opened the box — start the mic without waiting for a click. */
   voice: boolean;
+  /** Exchanges already in this quick-chat session. 0 = a fresh conversation. */
+  turnCount: number;
 }
 
 /** One image attached to a question. `data` is base64 without the data-URI
@@ -38,11 +40,14 @@ export const activeProviderSupportsImages = (): Promise<boolean> =>
   invoke("active_provider_supports_images");
 
 /** Grow/shrink the input popup to fit its contents. Remind Mode wins over the
- *  image-thumbnail row — it hides attachments, so both are never true. */
+ *  image-thumbnail row — it hides attachments, so both are never true — and
+ *  over the follow-up chip, which shares Remind Mode's label row. */
 export const resizeAssistantInput = (
   hasAttachments: boolean,
   remindMode: boolean,
-): Promise<void> => invoke("resize_assistant_input", { hasAttachments, remindMode });
+  followUp: boolean,
+): Promise<void> =>
+  invoke("resize_assistant_input", { hasAttachments, remindMode, followUp });
 
 /** Suppress blur-dismiss while a native file-picker dialog is open. */
 export const setAssistantDialogOpen = (open: boolean): Promise<void> =>
@@ -80,6 +85,11 @@ export const deleteTtsModel = (id: string): Promise<void> =>
 /** Stored phase (event-only phases like "error" are never returned here). */
 export const getAssistantPhase = (): Promise<AssistantPhase> =>
   invoke("get_assistant_state");
+
+/** Exchanges in the live session — for a webview that mounted mid-session (a
+ *  reload) and so has no `assistant-state` event to learn the count from. */
+export const getAssistantTurnCount = (): Promise<number> =>
+  invoke("get_assistant_turn_count");
 
 export const onAssistantState = (
   cb: (state: AssistantState) => void,
