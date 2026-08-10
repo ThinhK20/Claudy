@@ -41,6 +41,10 @@ pub const MAX_EVENTS: usize = 20_000;
 pub enum Source {
     Prompt,
     Assistant,
+    /// Quick Chat compacting its own conversation memory. A real billed call
+    /// the user didn't explicitly ask for, so it gets its own line rather than
+    /// hiding inside `Assistant`.
+    AssistantSummary,
     ReminderParse,
     ReminderCreated,
     ReminderFired,
@@ -56,6 +60,7 @@ impl Source {
         match self {
             Self::Prompt => "prompt",
             Self::Assistant => "assistant",
+            Self::AssistantSummary => "assistantSummary",
             Self::ReminderParse => "reminderParse",
             Self::ReminderCreated => "reminderCreated",
             Self::ReminderFired => "reminderFired",
@@ -71,6 +76,7 @@ impl<'de> Deserialize<'de> for Source {
         Ok(match String::deserialize(d).unwrap_or_default().as_str() {
             "prompt" => Self::Prompt,
             "assistant" => Self::Assistant,
+            "assistantSummary" => Self::AssistantSummary,
             "reminderParse" => Self::ReminderParse,
             "reminderCreated" => Self::ReminderCreated,
             "reminderFired" => Self::ReminderFired,

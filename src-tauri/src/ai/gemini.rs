@@ -77,6 +77,30 @@ impl AiProvider for Gemini {
                 }
             }
         }
+        if !opts.history.is_empty() {
+            // Gemini has no message array — history is extra `contents` entries.
+            // A single-turn request omits `role` entirely (and must keep doing
+            // so, or every existing body changes), but once there is history
+            // every entry needs one, and the model's side is called "model".
+            let mut contents: Vec<serde_json::Value> = opts
+                .history
+                .iter()
+                .map(|t| {
+                    let role = match t.role {
+                        super::Role::User => "user",
+                        super::Role::Assistant => "model",
+                    };
+                    serde_json::json!({ "role": role, "parts": [{ "text": t.content }] })
+                })
+                .collect();
+            if let Some(mut current) = req.body["contents"][0].as_object().cloned() {
+                // Keeps the current turn's parts intact — the text plus any
+                // inline_data the image block just appended.
+                current.insert("role".into(), serde_json::json!("user"));
+                contents.push(serde_json::Value::Object(current));
+            }
+            req.body["contents"] = serde_json::Value::Array(contents);
+        }
         if opts.web_search {
             // Google Search grounding: Gemini decides when to search and
             // grounds its answer in the results.
@@ -234,5 +258,77 @@ mod tests {
         assert_eq!(parts[0]["text"], "Look");
         assert_eq!(parts[1]["inline_data"]["mime_type"], "image/webp");
         assert_eq!(parts[1]["inline_data"]["data"], "ZZZ");
+    }
+
+    /// Two prior turns in the shape `assistant::conversation` produces.
+    fn history() -> Vec<super::super::HistoryTurn> {
+        use super::super::{HistoryTurn, Role};
+        vec![
+            HistoryTurn { role: Role::User, content: "What is Tauri?".into() },
+            HistoryTurn { role: Role::Assistant, content: "A desktop framework.".into() },
+        ]
+    }
+
+    #[test]
+    fn history_becomes_contents_entries_with_user_and_model_roles() {
+        let cfg = ProviderSettings::default();
+        let req = Gemini
+            .build_request_with(
+                &cfg,
+                Some("k"),
+                "How does it compare?",
+                super::super::RequestOptions { history: history(), ..Default::default() },
+            )
+            .unwrap();
+        let contents = req.body["contents"].as_array().unwrap();
+        assert_eq!(contents.len(), 3);
+        assert_eq!(contents[0]["role"], "user");
+        assert_eq!(contents[0]["parts"][0]["text"], "What is Tauri?");
+        // Gemini's vocabulary: the assistant side is "model", not "assistant".
+        assert_eq!(contents[1]["role"], "model");
+        assert_eq!(contents[1]["parts"][0]["text"], "A desktop framework.");
+        assert_eq!(contents[2]["parts"][0]["text"], "How does it compare?");
+    }
+
+    #[test]
+    fn the_current_turn_gains_an_explicit_role_only_when_history_is_present() {
+        let cfg = ProviderSettings::default();
+        // Single turn: `role` is legal to omit and MUST stay omitted, or every
+        // existing request body changes.
+        let alone = Gemini
+            .build_request_with(&cfg, Some("k"), "Hi", super::super::RequestOptions::default())
+            .unwrap();
+        assert!(alone.body["contents"][0].get("role").is_none());
+        assert_eq!(alone.body, Gemini.build_request(&cfg, Some("k"), "Hi").unwrap().body);
+
+        let with = Gemini
+            .build_request_with(
+                &cfg,
+                Some("k"),
+                "Hi",
+                super::super::RequestOptions { history: history(), ..Default::default() },
+            )
+            .unwrap();
+        assert_eq!(with.body["contents"][2]["role"], "user");
+    }
+
+    #[test]
+    fn history_keeps_inline_data_on_the_current_contents_entry() {
+        let cfg = ProviderSettings::default();
+        let opts = super::super::RequestOptions {
+            history: history(),
+            images: vec![super::super::ImageAttachment {
+                media_type: "image/webp".into(),
+                data: "ZZZ".into(),
+            }],
+            ..Default::default()
+        };
+        let req = Gemini.build_request_with(&cfg, Some("k"), "Look", opts).unwrap();
+        let contents = req.body["contents"].as_array().unwrap();
+        assert_eq!(contents.len(), 3);
+        assert_eq!(contents[0]["parts"].as_array().unwrap().len(), 1, "history stays text-only");
+        let current = &contents[2]["parts"];
+        assert_eq!(current[0]["text"], "Look");
+        assert_eq!(current[1]["inline_data"]["data"], "ZZZ");
     }
 }

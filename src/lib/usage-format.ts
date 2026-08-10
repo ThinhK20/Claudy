@@ -77,6 +77,7 @@ export function barPercent(value: number, max: number): number {
 const SOURCE_LABELS: Record<UsageSource, string> = {
   prompt: "Prompt shortcuts",
   assistant: "Quick-ask assistant",
+  assistantSummary: "Quick Chat memory",
   reminderParse: "Reminder time parsing",
   reminderCreated: "Reminders created",
   reminderFired: "Reminders fired",

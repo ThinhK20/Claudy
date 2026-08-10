@@ -1,9 +1,12 @@
+mod conversation;
+
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, State};
 
 use crate::{ai, config, tts};
+use conversation::Conversation;
 
 pub const ASSISTANT_LABEL: &str = "assistant";
 
@@ -17,6 +20,9 @@ const INPUT_WITH_ATTACHMENTS_SIZE: (u32, u32) = (420, 264);
 /// extra height the chip and the hint row crowd each other.
 const INPUT_REMIND_SIZE: (u32, u32) = (420, 190);
 const PANEL_SIZE: (u32, u32) = (460, 380);
+/// Height of one label row above the textarea, measured as what the Remind Mode
+/// label already costs. The follow-up chip occupies that same row.
+const LABEL_ROW_HEIGHT: u32 = INPUT_REMIND_SIZE.1 - INPUT_SIZE.1;
 /// Logical gap between the cursor and the window's near corner.
 const CURSOR_OFFSET: i32 = 14;
 
@@ -49,6 +55,11 @@ pub struct AssistantState {
     /// the rest of the session so follow-up questions reopen at that size.
     /// `None` until the user resizes; cleared naturally on app restart.
     pub panel_size: Mutex<Option<(u32, u32)>>,
+    /// The live quick-chat session, or `None` when no panel is open. Memory
+    /// only — never persisted, and `close()` is the single place it is dropped,
+    /// which is what makes "closing ends the conversation" true for Esc, the X
+    /// button, blur-dismiss, the auto-close timer and the shortcut alike.
+    pub conversation: Mutex<Option<Conversation>>,
 }
 
 /// Top-left position for the assistant window, anchored near the cursor and
@@ -111,6 +122,10 @@ struct AssistantEvent {
     /// Set when the wake word opened the box: the frontend starts the
     /// microphone straight away so the flow stays hands-free.
     voice: bool,
+    /// Exchanges already in this session. 0 = a fresh conversation; the ask box
+    /// shows its follow-up chip above that. Stamped by `publish`, so it can
+    /// never disagree with the stored session.
+    turn_count: usize,
 }
 
 /// The common shape — a phase plus the question/answer it applies to. Anything
@@ -126,9 +141,22 @@ fn event(
 /// Single choke point for state fan-out to the assistant webview. Also
 /// reconciles the wake listener, which must not hold the microphone while the
 /// panel is open — nor hear Claudy speaking its own answer.
-fn publish(app: &AppHandle, event: AssistantEvent) {
+fn publish(app: &AppHandle, mut event: AssistantEvent) {
+    // Stamped here rather than at each call site: `publish` is already the one
+    // choke point, so the count can never drift from the stored session.
+    event.turn_count = turn_count(app);
     let _ = app.emit("assistant-state", event);
     crate::wake::reconcile(app);
+}
+
+/// Exchanges recorded in the live session, or 0 when none is open.
+fn turn_count(app: &AppHandle) -> usize {
+    app.state::<AssistantState>()
+        .conversation
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map_or(0, Conversation::turn_count)
 }
 
 /// Resize the assistant window to a logical size, converting to physical via
@@ -232,6 +260,12 @@ fn show_input_with(app: &AppHandle, voice: bool) -> Result<(), String> {
     // clears any lingering file-dialog flag from a prior session.
     bump_generation(app);
     app.state::<AssistantState>().dialog_open.store(false, Ordering::SeqCst);
+    // A fresh conversation per open. Unconditional rather than "only when
+    // None": the window was hidden, so `close()` has already cleared it — and
+    // if that invariant ever broke, starting clean is the safe failure, never
+    // resurrecting a conversation the user believed was over.
+    *app.state::<AssistantState>().conversation.lock().unwrap() =
+        Some(Conversation::new(chrono::Local::now()));
     w.set_size(PhysicalSize::new(win.0, win.1))
         .map_err(|e| e.to_string())?;
     w.set_position(PhysicalPosition::new(x, y))
@@ -284,8 +318,19 @@ pub fn ask(app: &AppHandle, question: String, images: Vec<ai::ImageAttachment>) 
         && ai::active_provider_supports_web_search(app).unwrap_or(false);
     // Custom system prompt (None when unset) — assistant path only; the
     // dictation flow builds default options and stays system-free.
-    let system = settings.as_ref().and_then(|s| s.assistant.system_prompt());
-    let opts = ai::RequestOptions { web_search, system, images };
+    let user_system = settings.as_ref().and_then(|s| s.assistant.system_prompt());
+    // One lock, one pass, released before any await: refresh the session's copy
+    // of the system prompt (so a Settings edit applies mid-session), then take
+    // the budgeted replay of earlier turns.
+    let had_images = !images.is_empty();
+    let (history, system, session_id) = {
+        let state = app.state::<AssistantState>();
+        let mut guard = state.conversation.lock().unwrap();
+        let conv = guard.get_or_insert_with(|| Conversation::new(chrono::Local::now()));
+        conv.system = user_system;
+        (conv.history(), conv.request_system(web_search), conv.id.clone())
+    };
+    let opts = ai::RequestOptions { web_search, system, images, history };
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let result =
@@ -296,11 +341,17 @@ pub fn ask(app: &AppHandle, question: String, images: Vec<ai::ImageAttachment>) 
         match result {
             Ok(answer) => {
                 *app.state::<AssistantState>().last_answer.lock().unwrap() = Some(answer.clone());
+                // Record before publishing: `publish` stamps the turn count the
+                // ask box shows, and it must already include this exchange.
+                record_turn(&app, &session_id, &question, &answer, web_search, had_images);
                 set_phase(&app, Phase::Answering);
                 publish(
                     &app,
                     event("answering", Some(question.clone()), Some(answer.clone())),
                 );
+                // Dispatched before `maybe_speak`, which blocks for the whole
+                // playback — the fold has no reason to wait for speech.
+                spawn_fold_if_needed(&app, session_id);
                 maybe_speak(&app, generation, question, answer).await;
             }
             Err(message) => {
@@ -313,6 +364,75 @@ pub fn ask(app: &AppHandle, question: String, images: Vec<ai::ImageAttachment>) 
                     },
                 );
             }
+        }
+    });
+}
+
+/// Append a completed exchange to the live session.
+///
+/// Silently no-ops when the session was closed or replaced while the answer was
+/// in flight — the generation guard catches most of that, but after a close and
+/// a reopen the session id is the thing that actually distinguishes them.
+fn record_turn(
+    app: &AppHandle,
+    session_id: &str,
+    question: &str,
+    answer: &str,
+    web_search: bool,
+    had_images: bool,
+) {
+    let state = app.state::<AssistantState>();
+    let mut guard = state.conversation.lock().unwrap();
+    if let Some(conv) = guard.as_mut().filter(|c| c.id == session_id) {
+        conv.record_turn(
+            question.to_string(),
+            answer.to_string(),
+            web_search,
+            had_images,
+            chrono::Local::now(),
+        );
+    }
+}
+
+/// Fold older exchanges into a compact summary once the session outgrows the
+/// verbatim window.
+///
+/// Runs in the background AFTER the answer is on screen, so it never costs the
+/// user latency, and with `RequestOptions::default()` so the user's own system
+/// prompt ("answer as a pirate") can't corrupt the summary. The result is
+/// discarded unless the session id still matches.
+fn spawn_fold_if_needed(app: &AppHandle, session_id: String) {
+    let request = {
+        let state = app.state::<AssistantState>();
+        let mut guard = state.conversation.lock().unwrap();
+        guard
+            .as_mut()
+            .filter(|c| c.id == session_id)
+            .and_then(conversation::Conversation::take_fold_request)
+    };
+    let Some(request) = request else { return };
+
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let result = ai::complete_with_options(
+            &app,
+            &request.prompt,
+            ai::RequestOptions::default(),
+            ai::UsageSource::AssistantSummary,
+        )
+        .await;
+        let state = app.state::<AssistantState>();
+        let mut guard = state.conversation.lock().unwrap();
+        let Some(conv) = guard.as_mut().filter(|c| c.id == session_id) else {
+            return; // session closed while the summarizer ran
+        };
+        match result {
+            Ok(summary) => {
+                conv.apply_fold(request.boundary, summary);
+            }
+            // A failed fold is not a failed session: the next answer simply
+            // tries again, and selection hard-trims meanwhile.
+            Err(_) => conv.fold_failed(),
         }
     });
 }
@@ -420,10 +540,23 @@ async fn wait_for_drain(app: &AppHandle, generation: u64) {
 }
 
 /// Close the panel: drop stale flows, stop speech, hide, reset to idle.
+///
+/// THE end of a quick-chat session. Every hide path funnels through here — Esc,
+/// the X button, blur-while-typing, the auto-close timer, re-pressing the
+/// shortcut — so "closing ends the conversation" needs no other rule. Dropping
+/// the struct is the whole privacy story: it was never written anywhere else.
 pub fn close(app: &AppHandle) {
     capture_panel_size(app);
     bump_generation(app);
     app.state::<tts::TtsState>().playback.stop();
+    {
+        let state = app.state::<AssistantState>();
+        *state.conversation.lock().unwrap() = None;
+        // Only read by stop/replay_assistant_speech, both unreachable with the
+        // window hidden — no reason to keep the last exchange in memory.
+        *state.last_question.lock().unwrap() = None;
+        *state.last_answer.lock().unwrap() = None;
+    }
     if let Some(w) = app.get_webview_window(ASSISTANT_LABEL) {
         let _ = w.hide();
     }
@@ -441,17 +574,33 @@ pub fn close_assistant(app: AppHandle) {
     close(&app);
 }
 
-/// Grow/shrink the input popup to fit its current contents. The frontend calls
-/// this when the attachment count crosses zero or the mode toggles.
-/// Remind Mode wins: it hides attachments, so the two are never both true.
-#[tauri::command]
-pub fn resize_assistant_input(app: AppHandle, has_attachments: bool, remind_mode: bool) {
-    let size = match (remind_mode, has_attachments) {
+/// Logical size the input popup needs for its current contents. Pure so the
+/// arithmetic is testable without a window.
+///
+/// Remind Mode wins: it hides attachments, so those two are never both true.
+/// It also owns the label row, so the follow-up chip never stacks on top of it
+/// — the frontend hides the chip in Remind Mode for the same reason.
+pub fn input_size(has_attachments: bool, remind_mode: bool, follow_up: bool) -> (u32, u32) {
+    let base = match (remind_mode, has_attachments) {
         (true, _) => INPUT_REMIND_SIZE,
         (false, true) => INPUT_WITH_ATTACHMENTS_SIZE,
         (false, false) => INPUT_SIZE,
     };
-    resize_to(&app, size);
+    let extra = if follow_up && !remind_mode { LABEL_ROW_HEIGHT } else { 0 };
+    (base.0, base.1 + extra)
+}
+
+/// Grow/shrink the input popup to fit its current contents. The frontend calls
+/// this when the attachment count crosses zero, the mode toggles, or the
+/// session gains its first exchange.
+#[tauri::command]
+pub fn resize_assistant_input(
+    app: AppHandle,
+    has_attachments: bool,
+    remind_mode: bool,
+    follow_up: bool,
+) {
+    resize_to(&app, input_size(has_attachments, remind_mode, follow_up));
 }
 
 /// Toggle the flag that suppresses the Input-phase blur-dismiss while a native
@@ -463,12 +612,19 @@ pub fn set_assistant_dialog_open(app: AppHandle, open: bool) {
 
 /// Return to the input phase for a follow-up question, resizing back down and
 /// refocusing the textarea.
+///
+/// Deliberately does NOT touch `conversation`: this is "ask another thing in
+/// the same chat", and the whole point is that the next question resolves "it"
+/// against the answer still on screen. `bump_generation` here is cancellation,
+/// not context reset. Only `close()` ends a session.
 #[tauri::command]
 pub fn assistant_new_question(app: AppHandle) -> Result<(), String> {
     capture_panel_size(&app);
     bump_generation(&app);
     app.state::<tts::TtsState>().playback.stop();
-    resize_to(&app, INPUT_SIZE);
+    // Size for the follow-up chip up front, or the window flashes at the bare
+    // input height before the frontend's resize effect corrects it.
+    resize_to(&app, input_size(false, false, turn_count(&app) > 0));
     if let Some(w) = app.get_webview_window(ASSISTANT_LABEL) {
         let _ = w.set_focus();
     }
@@ -523,6 +679,18 @@ pub fn get_assistant_state(state: State<'_, AssistantState>) -> Result<Phase, St
     Ok(*state.phase.lock().map_err(|e| e.to_string())?)
 }
 
+/// Exchanges in the live session, for a frontend that mounted mid-session (a
+/// webview reload) and has no event to learn the count from yet.
+#[tauri::command]
+pub fn get_assistant_turn_count(state: State<'_, AssistantState>) -> Result<usize, String> {
+    Ok(state
+        .conversation
+        .lock()
+        .map_err(|e| e.to_string())?
+        .as_ref()
+        .map_or(0, Conversation::turn_count))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -563,6 +731,32 @@ mod tests {
         let (x, y) = anchor_at_cursor((100, 100), (0, 0), (300, 200), (420, 500), 14);
         assert_eq!(x, 0);
         assert_eq!(y, 0);
+    }
+
+    #[test]
+    fn input_size_matches_the_legacy_sizes_without_a_follow_up() {
+        // Pure regression pin: nothing about the pre-session popup may move.
+        assert_eq!(input_size(false, false, false), INPUT_SIZE);
+        assert_eq!(input_size(true, false, false), INPUT_WITH_ATTACHMENTS_SIZE);
+        assert_eq!(input_size(false, true, false), INPUT_REMIND_SIZE);
+    }
+
+    #[test]
+    fn input_size_adds_one_row_for_the_follow_up_chip() {
+        assert_eq!(input_size(false, false, true).1, INPUT_SIZE.1 + LABEL_ROW_HEIGHT);
+        assert_eq!(
+            input_size(true, false, true).1,
+            INPUT_WITH_ATTACHMENTS_SIZE.1 + LABEL_ROW_HEIGHT
+        );
+        assert_eq!(input_size(false, false, true).0, INPUT_SIZE.0, "width never changes");
+    }
+
+    #[test]
+    fn input_size_does_not_stack_the_follow_up_row_on_remind_mode() {
+        // Remind Mode already owns the label row, and the frontend hides the
+        // chip there — the two must never both claim height.
+        assert_eq!(input_size(false, true, true), INPUT_REMIND_SIZE);
+        assert_eq!(input_size(true, true, true), INPUT_REMIND_SIZE);
     }
 
     #[test]
