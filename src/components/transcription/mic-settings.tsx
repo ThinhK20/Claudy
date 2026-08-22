@@ -35,6 +35,9 @@ export function MicSettings() {
   const [error, setError] = useState<string | null>(null);
   const unlistenRef = useRef<(() => void) | null>(null);
   const isTestingRef = useRef(false);
+  // Guards the async gap in toggleTest: unmounting mid-subscribe would
+  // otherwise leave the mic-level listener registered with no way to drop it.
+  const mountedRef = useRef(true);
   const settings = useSettings((s) => s.settings);
   const updateSettings = useSettings((s) => s.update);
 
@@ -43,6 +46,7 @@ export function MicSettings() {
       .then(setDevices)
       .catch((e: unknown) => setError(String(e)));
     return () => {
+      mountedRef.current = false;
       unlistenRef.current?.();
       if (isTestingRef.current) stopCapture().catch(() => {});
     };
@@ -61,7 +65,14 @@ export function MicSettings() {
         isTestingRef.current = false;
         setLevel(0);
       } else {
-        unlistenRef.current = await onMicLevel(setLevel);
+        const unlisten = await onMicLevel(setLevel);
+        if (!mountedRef.current) {
+          // Unmounted while subscribing; nothing was captured yet, so drop the
+          // listener and leave the audio slot alone.
+          unlisten();
+          return;
+        }
+        unlistenRef.current = unlisten;
         await startCapture(settings.micDevice);
         setIsTesting(true);
         isTestingRef.current = true;

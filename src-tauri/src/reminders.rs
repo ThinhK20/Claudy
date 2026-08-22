@@ -364,7 +364,7 @@ fn match_relative(
     if let Some((n, unit)) = split_compact(&next.lower) {
         if let Some(secs) = unit_seconds(unit) {
             if n >= 1 {
-                return Some((now + Duration::seconds(n * secs), i + 1));
+                return Some((shift_seconds(now, n, secs)?, i + 1));
             }
         }
     }
@@ -374,7 +374,22 @@ fn match_relative(
     if n < 1 {
         return None;
     }
-    Some((now + Duration::seconds(n * secs), i + 2))
+    Some((shift_seconds(now, n, secs)?, i + 2))
+}
+
+/// `now` shifted forward by `n * secs` seconds, or `None` when that lands
+/// outside the representable range.
+///
+/// Every factor here comes from user text: `word_number` falls through to
+/// `parse::<i64>()`, so "in 999999999 days" arrives intact. `n * secs`,
+/// `Duration::seconds` and `DateTime + TimeDelta` each panic on overflow, and
+/// `preview_reminder` is a *sync* command run on every keystroke — an unwind
+/// there goes straight into the IPC handler. A nonsense offset must read as
+/// "no time found", which is what the rest of the parser already does with
+/// input it can't use.
+fn shift_seconds(now: DateTime<Local>, n: i64, secs: i64) -> Option<DateTime<Local>> {
+    let total = n.checked_mul(secs)?;
+    now.checked_add_signed(Duration::try_seconds(total)?)
 }
 
 /// The date named at `i`, that anchor's default hour, and the index of its
@@ -407,13 +422,31 @@ fn match_day(tokens: &[Token], i: usize, now: DateTime<Local>) -> Option<(NaiveD
     }
 }
 
+/// Read a bare 1-11 hour in the half of the day its anchor names.
+///
+/// "tonight" carries an evening meaning that the clock following it must not
+/// throw away: "tonight at 8" is 20:00, not 08:00. Taken literally it was
+/// usually already past, and the day branch's own past-time guard then dropped
+/// the entire parse to the AI fallback — so the failure was silent and offline
+/// it failed outright. Only an ambiguous hour is moved: "tonight at 8am" says
+/// what it means, and "at 10:30" already names the hour exactly.
+fn hour_for_anchor(clock: Clock, default_hour: u32) -> u32 {
+    let ambiguous = !clock.explicit && !clock.precise && (1..=11).contains(&clock.hour);
+    if ambiguous && default_hour >= 12 {
+        clock.hour + 12
+    } else {
+        clock.hour
+    }
+}
+
 /// A time part following a day anchor: "at 9am", "at 17:00", a bare
 /// meridiem/colon clock ("tomorrow 9am"), or "morning"/"evening"/…
-fn match_day_time(tokens: &[Token], after: usize) -> Option<(u32, u32, usize)> {
+/// `default_hour` is the anchor's own time of day — see `hour_for_anchor`.
+fn match_day_time(tokens: &[Token], after: usize, default_hour: u32) -> Option<(u32, u32, usize)> {
     let tok = tokens.get(after)?;
     if tok.lower == "at" || tok.lower == "around" {
         if let Some((c, end)) = match_clock(tokens, after + 1) {
-            return Some((c.hour, c.minute, end));
+            return Some((hour_for_anchor(c, default_hour), c.minute, end));
         }
     }
     if let Some(hour) = day_part_hour(&tok.lower) {
@@ -429,7 +462,31 @@ fn match_day_time(tokens: &[Token], after: usize) -> Option<(u32, u32, usize)> {
             .is_some_and(|n| n.lower == "am" || n.lower == "pm");
     if unambiguous {
         if let Some((c, end)) = match_clock(tokens, after) {
-            return Some((c.hour, c.minute, end));
+            return Some((hour_for_anchor(c, default_hour), c.minute, end));
+        }
+    }
+    None
+}
+
+/// A clock stated *before* the day it belongs to: "dinner at 7pm tomorrow".
+/// Returns the index the time expression starts at, plus the resolved hour and
+/// minute.
+///
+/// Only a clock running right up to the day word counts, so an unrelated
+/// earlier time ("book the 9am flight, dinner tomorrow") can't be stolen.
+fn match_clock_before(
+    tokens: &[Token],
+    day_start: usize,
+    default_hour: u32,
+) -> Option<(usize, u32, u32)> {
+    for j in (0..day_start).rev() {
+        if !matches!(tokens[j].lower.as_str(), "at" | "around") {
+            continue;
+        }
+        if let Some((c, end)) = match_clock(tokens, j + 1) {
+            if end + 1 == day_start {
+                return Some((j, hour_for_anchor(c, default_hour), c.minute));
+            }
         }
     }
     None
@@ -523,15 +580,32 @@ pub fn parse_when(text: &str, now: DateTime<Local>) -> Option<Parsed> {
         title: clean_title(text, tokens[i].start, tokens[end].end),
     };
 
+    // Most specific first: "in 2 hours" before a day, a day before a day-less
+    // "at 5pm". Each matcher sweeps the whole string before the next one runs.
+    // Trying all three at each index in turn instead would rank by *position*
+    // rather than specificity, so a clock early in the sentence beat a day word
+    // later in it — "dinner at 7pm tomorrow" landed today, with "tomorrow" left
+    // behind in the title as evidence the day was never read.
     for i in 0..tokens.len() {
-        // Most specific first: "in 2 hours" before a day, a day before a
-        // day-less "at 5pm".
         if let Some((due_at, end)) = match_relative(&tokens, i, now) {
             return Some(found(i, due_at, end));
         }
+    }
+    for i in 0..tokens.len() {
         if let Some((date, default_hour, day_end)) = match_day(&tokens, i, now) {
-            let (hour, minute, end) =
-                match_day_time(&tokens, day_end + 1).unwrap_or((default_hour, 0, day_end));
+            // A time part after the anchor ("tomorrow at 7pm"), or failing
+            // that one stated just before it ("dinner at 7pm tomorrow") —
+            // the same sentence to a person, and the more natural phrasing.
+            // `start` moves back to the clock in that case so the title loses
+            // the whole expression instead of keeping a dangling "at 7pm".
+            let (start, hour, minute, end) =
+                match match_day_time(&tokens, day_end + 1, default_hour) {
+                    Some((h, m, e)) => (i, h, m, e),
+                    None => match match_clock_before(&tokens, i, default_hour) {
+                        Some((clock_at, h, m)) => (clock_at, h, m, day_end),
+                        None => (i, default_hour, 0, day_end),
+                    },
+                };
             let due_at = at_local(date, hour, minute)?;
             // The user named a day outright. If it lands in the past ("today
             // at 9am" typed at 14:30) say we don't know rather than let the
@@ -539,8 +613,10 @@ pub fn parse_when(text: &str, now: DateTime<Local>) -> Option<Parsed> {
             if due_at <= now {
                 return None;
             }
-            return Some(found(i, due_at, end));
+            return Some(found(start, due_at, end));
         }
+    }
+    for i in 0..tokens.len() {
         if let Some((due_at, end)) = match_bare_clock(&tokens, i, now) {
             return Some(found(i, due_at, end));
         }
@@ -639,22 +715,38 @@ pub fn start_scheduler(app: AppHandle) {
 
 fn fire_due(app: &AppHandle) {
     let now = Local::now();
-    let Ok(list) = load(app) else { return };
+    let list = match load(app) {
+        Ok(l) => l,
+        Err(e) => {
+            // Silent here meant every reminder stopped firing forever while
+            // the tray and the scheduler both looked healthy — the save
+            // failure three lines down was already logged, so match it.
+            eprintln!("reminders: could not read the queue: {e}");
+            return;
+        }
+    };
     let due = due_now(&list, now);
     if due.is_empty() {
         return;
     }
-    let enabled = config::load(app)
-        .map(|s| s.notifications_enabled)
-        .unwrap_or(true);
-    for id in &due {
-        if let Some(r) = list.iter().find(|r| &r.id == id) {
-            notify::send_with_title(app, enabled, NOTIFICATION_TITLE, &notification_body(r, now));
-        }
-    }
+    // Compose the messages from the snapshot, persist, and only then show
+    // them. Showing a toast is a synchronous OS call that can sit for a long
+    // time, and this list is written back wholesale — anything the user saved
+    // or deleted while we waited inside it would be silently reverted.
+    let bodies: Vec<String> = due
+        .iter()
+        .filter_map(|id| list.iter().find(|r| &r.id == id))
+        .map(|r| notification_body(r, now))
+        .collect();
     let updated = mark_fired(list, &due, &now.to_rfc3339());
     if let Err(e) = save_list(app, &updated) {
         eprintln!("reminders: could not persist fired state: {e}");
+    }
+    let enabled = config::load(app)
+        .map(|s| s.notifications_enabled)
+        .unwrap_or(true);
+    for body in &bodies {
+        notify::send_with_title(app, enabled, NOTIFICATION_TITLE, body);
     }
     // Metadata only: that a reminder fired, never which one.
     for _ in &due {
@@ -783,7 +875,11 @@ pub fn snooze_reminder(app: AppHandle, id: String, minutes: i64) -> Result<Remin
         .find(|r| r.id == id)
         .cloned()
         .ok_or("That reminder no longer exists")?;
-    reminder.due_at = (Local::now() + Duration::minutes(minutes)).to_rfc3339();
+    // Same overflow hazard as the parser: `minutes` crosses the IPC boundary
+    // as an unvalidated i64 and both `Duration::minutes` and the add panic.
+    let due = shift_seconds(Local::now(), minutes, 60)
+        .ok_or("That snooze is too far in the future")?;
+    reminder.due_at = due.to_rfc3339();
     reminder.status = Status::Pending;
     reminder.fired_at = String::new();
 
@@ -809,6 +905,54 @@ pub fn complete_reminder(app: AppHandle, id: String) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_day_named_after_the_clock_still_sets_the_day() {
+        // The matcher priority is meant to run over the whole string ("a day
+        // before a day-less 'at 5pm'"), so a clock earlier in the sentence
+        // must not win over a day word later in it.
+        let now = Local.with_ymd_and_hms(2026, 7, 24, 14, 30, 0).unwrap();
+        let p = parse_when("dinner at 7pm tomorrow", now).expect("should parse");
+        assert_eq!(p.due_at, Local.with_ymd_and_hms(2026, 7, 25, 19, 0, 0).unwrap());
+        assert!(!p.title.contains("tomorrow"), "the day token must be consumed: {}", p.title);
+
+        let p = parse_when("standup at 9am on monday", now).expect("should parse");
+        assert_eq!(p.due_at, Local.with_ymd_and_hms(2026, 7, 27, 9, 0, 0).unwrap());
+        assert!(!p.title.contains("monday"), "got {}", p.title);
+    }
+
+    #[test]
+    fn tonight_keeps_its_evening_reading_when_a_bare_hour_follows() {
+        // "tonight" means the evening; a following bare 1-11 hour with no
+        // am/pm must not be taken literally as the morning.
+        for hour_now in [7, 11, 19] {
+            let now = Local.with_ymd_and_hms(2026, 7, 24, hour_now, 0, 0).unwrap();
+            let p = parse_when("drinks tonight at 8", now)
+                .unwrap_or_else(|| panic!("should parse at {hour_now}:00"));
+            assert_eq!(
+                p.due_at,
+                Local.with_ymd_and_hms(2026, 7, 24, 20, 0, 0).unwrap(),
+                "at {hour_now}:00"
+            );
+        }
+    }
+
+    #[test]
+    fn an_absurd_offset_is_rejected_rather_than_panicking() {
+        // `preview_reminder` is a sync command run on every keystroke, so a
+        // panic here unwinds straight into the IPC handler and takes the
+        // window with it. Any i64 reaches this via `word_number`.
+        let now = Local.with_ymd_and_hms(2026, 7, 24, 14, 30, 0).unwrap();
+        for text in [
+            "remind me in 999999999 days",
+            "check in 99999999999999999s",
+            "ping in 9223372036854775807 weeks",
+            "in 9223372036854775807 minutes",
+        ] {
+            assert!(parse_when(text, now).is_none(), "{text} must not parse");
+        }
+    }
+
 
     /// Fixed reference point for every parser test: Fri 24 Jul 2026, 14:30.
     fn now() -> DateTime<Local> {

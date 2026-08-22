@@ -156,7 +156,34 @@ impl Totals {
 fn window_start(range: Range, now: DateTime<Local>) -> Option<NaiveDate> {
     // `days = 7` means today plus the previous six, so the axis has exactly
     // seven columns and "today" is always the last one.
-    range.days().map(|d| (now - Duration::days(d - 1)).date_naive())
+    //
+    // Subtract on the *date*, not the instant. `DateTime<Local> - Duration`
+    // removes an absolute 144 hours and then re-derives the local offset, so a
+    // DST transition inside the window shifts the result onto the wrong
+    // calendar day — 6 columns across a fall-back week, 8 across a
+    // spring-forward one, with a full day of runs dropped from every total.
+    // A `NaiveDate` has no offset to shift.
+    range
+        .days()
+        .map(|d| now.date_naive() - Duration::days(d - 1))
+}
+
+/// True when `a` is a strictly later instant than `b`.
+///
+/// RFC3339 strings only sort correctly when every value carries the same UTC
+/// offset, and `at` is stamped with `Local::now()` — so across a DST shift or
+/// a machine that moved timezone, `"…T01:05:00-05:00"` (the later instant)
+/// sorts *below* `"…T01:59:00-04:00"`. Compare the instants instead.
+fn is_later(a: &str, b: &str) -> bool {
+    match (
+        DateTime::parse_from_rfc3339(a.trim()),
+        DateTime::parse_from_rfc3339(b.trim()),
+    ) {
+        (Ok(a), Ok(b)) => a > b,
+        // A stored value we can't parse must not pin the row forever.
+        (Ok(_), Err(_)) => true,
+        _ => false,
+    }
 }
 
 /// Parse an event's timestamp into local time. A hand-edited or truncated
@@ -245,7 +272,7 @@ pub fn summarize(
                     t.add(e, cost);
                     // A rename must not split the row: keep the newest name
                     // and the newest timestamp.
-                    if e.at > stat.last_used_at {
+                    if is_later(&e.at, &stat.last_used_at) {
                         stat.last_used_at = e.at.clone();
                         stat.name = e.prompt_name.clone();
                     }
@@ -403,6 +430,46 @@ mod tests {
             ok: true,
             ..UsageEvent::default()
         }
+    }
+
+    #[test]
+    fn a_later_instant_wins_even_when_the_offset_makes_the_string_sort_lower() {
+        // The fall-back repeated hour: 01:05-05:00 is 06:05 UTC, genuinely
+        // later than 01:59-04:00 (05:59 UTC) — but it sorts lower as a string.
+        let earlier = "2026-11-01T01:59:00-04:00";
+        let later = "2026-11-01T01:05:00-05:00";
+        assert!(later < earlier, "precondition: the strings sort the wrong way");
+        assert!(is_later(later, earlier), "the later instant must win");
+        assert!(!is_later(earlier, later));
+        // A machine carried across timezones hits the same inversion.
+        assert!(is_later("2026-07-24T12:30:00-05:00", "2026-07-24T23:00:00+07:00"));
+    }
+
+    #[test]
+    fn a_rename_across_a_dst_boundary_keeps_the_newest_name() {
+        let events = vec![
+            prompt_run("a", "Old name", "2026-11-01T01:59:00-04:00".into(), 10, 2),
+            prompt_run("a", "New name", "2026-11-01T01:05:00-05:00".into(), 10, 2),
+        ];
+        let now = Local.with_ymd_and_hms(2026, 11, 1, 23, 0, 0).unwrap();
+        let s = summarize(&events, Range::All, now, &[]);
+        assert_eq!(s.top_prompts.len(), 1, "a rename must not split the row");
+        assert_eq!(s.top_prompts[0].name, "New name");
+    }
+
+    #[test]
+    fn the_window_start_is_counted_in_calendar_days() {
+        // `now - Duration::days(6)` subtracts 144 absolute hours and then
+        // re-derives the local offset, so a DST transition inside the window
+        // lands it on the wrong date — 6 columns across a fall-back week, 8
+        // across a spring-forward one. Date arithmetic has no offset to shift.
+        // (The failure itself only reproduces in a DST timezone; this pins the
+        // calendar-day contract that makes it impossible.)
+        for (range, days) in [(Range::Week, 6), (Range::Month, 29), (Range::Quarter, 89)] {
+            let start = window_start(range, now()).expect("a bounded range has a start");
+            assert_eq!(start, now().date_naive() - Duration::days(days), "{range:?}");
+        }
+        assert_eq!(window_start(Range::All, now()), None);
     }
 
     #[test]

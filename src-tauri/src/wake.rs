@@ -12,6 +12,7 @@
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::VecDeque;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::Mutex;
 use std::thread::JoinHandle;
@@ -240,6 +241,8 @@ pub fn push_window(window: &mut VecDeque<f32>, samples: &[f32], cap: usize) {
 struct Listener {
     stop_tx: mpsc::Sender<()>,
     join: JoinHandle<()>,
+    /// Which `start` produced this listener — see `WakeState::generation`.
+    generation: u64,
 }
 
 /// Everything the listener thread needs, snapshotted at start so it never
@@ -256,6 +259,11 @@ struct ListenConfig {
 #[derive(Default)]
 pub struct WakeState {
     listener: Mutex<Option<Listener>>,
+    /// Bumped by every `start`. A listener thread that dies on its own clears
+    /// the slot, and without this it could clear a *newer* listener that
+    /// replaced it while it was being descheduled — leaving a detached thread
+    /// holding the microphone and `is_listening()` reporting false.
+    generation: AtomicU64,
     /// Serializes reconcile so two rapid state changes can't both act on a
     /// stale view of whether a listener is running.
     op: tokio::sync::Mutex<()>,
@@ -385,9 +393,15 @@ fn start(app: &AppHandle) {
     };
 
     let (stop_tx, stop_rx) = mpsc::channel::<()>();
+    let generation = app
+        .state::<WakeState>()
+        .generation
+        .fetch_add(1, Ordering::SeqCst)
+        .wrapping_add(1);
     let thread_app = app.clone();
-    let join = std::thread::spawn(move || listen_loop(thread_app, cfg, stop_rx));
-    *app.state::<WakeState>().listener.lock().unwrap() = Some(Listener { stop_tx, join });
+    let join = std::thread::spawn(move || listen_loop(thread_app, cfg, stop_rx, generation));
+    *app.state::<WakeState>().listener.lock().unwrap() =
+        Some(Listener { stop_tx, join, generation });
     publish(app, "listening", None);
 }
 
@@ -400,14 +414,41 @@ fn stop(app: &AppHandle) {
     publish(app, "off", None);
 }
 
+/// Release the listener slot from inside the worker thread, but only while it
+/// still holds *this* listener.
+///
+/// A commanded `stop` has already taken the slot, and a later `start` may have
+/// put a newer one there; clearing either would be wrong. Dropping the handle
+/// detaches rather than joins, which is what we want — this runs on the very
+/// thread that handle refers to. Returns whether the slot was actually
+/// cleared, so a stale exit can't publish over a live listener's state.
+fn retire(app: &AppHandle, generation: u64) -> bool {
+    let state = app.state::<WakeState>();
+    let Ok(mut slot) = state.listener.lock() else {
+        return false;
+    };
+    if slot.as_ref().is_some_and(|l| l.generation == generation) {
+        *slot = None;
+        return true;
+    }
+    false
+}
+
 /// Owns the capture stream and the rolling window for as long as it runs.
 /// Both are dropped on the way out, so stopping the listener releases the
 /// microphone and discards every buffered sample.
-fn listen_loop(app: AppHandle, cfg: ListenConfig, stop_rx: mpsc::Receiver<()>) {
+fn listen_loop(app: AppHandle, cfg: ListenConfig, stop_rx: mpsc::Receiver<()>, generation: u64) {
     use cpal::traits::StreamTrait;
 
     let fail = |message: String| {
-        emit(&app, "error", Some(message.clone()));
+        // Give up the slot before reporting: `start` stores the handle
+        // unconditionally, so leaving it behind would keep `is_listening()`
+        // true forever, and `reconcile` short-circuits on
+        // `want == is_listening()` — the wake word would never come back, while
+        // the tray and the settings page both went on saying "listening".
+        // `publish` rather than `emit` so the tray icon actually changes.
+        retire(&app, generation);
+        publish(&app, "error", Some(message.clone()));
         crate::notify::send(
             &app,
             cfg.notifications_enabled,
@@ -436,13 +477,24 @@ fn listen_loop(app: AppHandle, cfg: ListenConfig, stop_rx: mpsc::Receiver<()>) {
 
     loop {
         match stop_rx.recv_timeout(Duration::from_millis(TICK_MS)) {
-            Ok(()) | Err(RecvTimeoutError::Disconnected) => break,
+            Ok(()) | Err(RecvTimeoutError::Disconnected) => {
+                // A commanded `stop` has already taken the slot, so this is a
+                // no-op there; it matters when the sender was dropped without
+                // one, which would otherwise strand the slot as above.
+                if retire(&app, generation) {
+                    publish(&app, "off", None);
+                }
+                return;
+            }
             Err(RecvTimeoutError::Timeout) => {}
         }
 
         let raw = match parts.buffer.lock() {
             Ok(mut b) => std::mem::take(&mut *b),
-            Err(_) => break, // poisoned capture buffer: nothing useful left to do
+            // Poisoned capture buffer: nothing useful left to do. This used to
+            // fall out of the loop without a word, leaving the slot occupied
+            // and the UI claiming the wake word was still listening.
+            Err(_) => return fail("The microphone stream stopped unexpectedly".into()),
         };
         if raw.is_empty() {
             continue;
