@@ -206,12 +206,35 @@ pub struct UsageState {
     lock: Mutex<()>,
 }
 
+/// Read the log, one row at a time.
+///
+/// A row that no longer deserializes — a hand edit, a field written by a
+/// different build — costs that one row, never the file. That is the same
+/// tolerance the `Source` and `ErrorKind` parsers already apply per field, and
+/// the same rule `prune` and `local_date` apply to unparseable timestamps;
+/// deserializing straight into `Vec<UsageEvent>` instead would fail the whole
+/// vector over a single bad value.
+///
+/// `Err` is reserved for a store we can't open or a top-level shape that isn't
+/// an array. Callers must read it as "leave the file alone" — never as
+/// "start from empty".
 pub fn load(app: &AppHandle) -> Result<Vec<UsageEvent>, String> {
     let store = app.store(STORE_FILE).map_err(|e| e.to_string())?;
-    match store.get(KEY) {
-        Some(v) => serde_json::from_value(v).map_err(|e| e.to_string()),
-        None => Ok(Vec::new()),
-    }
+    let Some(value) = store.get(KEY) else {
+        return Ok(Vec::new());
+    };
+    parse_rows(value)
+}
+
+/// Pure half of `load`: turn the stored JSON into events, tolerating a bad row
+/// but not a bad container. Split out so the tolerance is testable without an
+/// `AppHandle` — the `summary` / `conversation` convention.
+fn parse_rows(value: serde_json::Value) -> Result<Vec<UsageEvent>, String> {
+    let rows: Vec<serde_json::Value> = serde_json::from_value(value).map_err(|e| e.to_string())?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|row| serde_json::from_value(row).ok())
+        .collect())
 }
 
 pub fn save_list(app: &AppHandle, events: &[UsageEvent]) -> Result<(), String> {
@@ -254,9 +277,44 @@ pub fn record(app: &AppHandle, event: UsageEvent) {
     let state = app.state::<UsageState>();
     let _guard = state.lock.lock().unwrap_or_else(|e| e.into_inner());
 
-    let mut events = load(app).unwrap_or_default();
+    // A failed *read* must never become a destructive *write*. The old
+    // `unwrap_or_default()` here turned an unreadable file into an empty vec,
+    // pushed one event onto it, and saved — silently replacing the entire
+    // history with a single row. Skipping this one record keeps the file
+    // intact, and the Usage page still surfaces the read error.
+    let Ok(mut events) = load(app) else {
+        return;
+    };
     events.push(event);
     prune(&mut events, settings.usage.retention_days, Local::now());
+    if save_list(app, &events).is_ok() {
+        let _ = app.emit(CHANGED_EVENT, ());
+    }
+}
+
+/// Apply the retention setting to what is already on disk, independently of
+/// whether anything new is being recorded.
+///
+/// `prune` otherwise runs only from `record`, and `record` returns early when
+/// recording is disabled — so a user who shortens retention *and* turns
+/// recording off keeps every old row forever, which is the opposite of what
+/// both controls say they do. Called once at startup; a no-op when nothing
+/// ages out, so a healthy log is never rewritten.
+pub fn enforce_retention(app: &AppHandle) {
+    let Ok(settings) = crate::config::load(app) else {
+        return;
+    };
+    let state = app.state::<UsageState>();
+    let _guard = state.lock.lock().unwrap_or_else(|e| e.into_inner());
+
+    let Ok(mut events) = load(app) else {
+        return;
+    };
+    let before = events.len();
+    prune(&mut events, settings.usage.retention_days, Local::now());
+    if events.len() == before {
+        return;
+    }
     if save_list(app, &events).is_ok() {
         let _ = app.emit(CHANGED_EVENT, ());
     }
@@ -403,6 +461,32 @@ mod tests {
         };
         let back: UsageEvent = serde_json::from_value(serde_json::to_value(&e).unwrap()).unwrap();
         assert_eq!(back, e);
+    }
+
+    #[test]
+    fn a_wrong_typed_field_costs_one_row_not_the_whole_log() {
+        // The container-level `#[serde(default)]` covers a *missing* field, not
+        // a wrong-typed one, so a single bad value used to fail the whole
+        // vector — and `record` turned that failure into an empty log.
+        let json = serde_json::json!([
+            { "at": "2026-07-26T14:05:12+07:00", "source": "prompt", "inputTokens": 100 },
+            { "at": "2026-07-26T15:05:12+07:00", "source": "prompt", "inputTokens": "412" },
+            { "at": "2026-07-26T16:05:12+07:00", "source": "prompt", "inputTokens": 300 },
+        ]);
+        let list = parse_rows(json).expect("a bad row must not fail the read");
+        assert_eq!(list.len(), 2, "both good rows survive");
+        assert_eq!(list[0].input_tokens, 100);
+        assert_eq!(list[1].input_tokens, 300);
+    }
+
+    #[test]
+    fn a_non_array_payload_is_an_error_rather_than_an_empty_log() {
+        // `record` relies on this: an unreadable file must come back as `Err`
+        // so it skips the append, never as `Ok(vec![])` — which it would then
+        // push onto and save, replacing the entire history with one row.
+        assert!(parse_rows(serde_json::json!({ "events": [] })).is_err());
+        assert!(parse_rows(serde_json::json!("truncated")).is_err());
+        assert!(parse_rows(serde_json::json!([])).unwrap().is_empty());
     }
 
     #[test]

@@ -110,6 +110,9 @@ pub fn run() {
             reminders::start_scheduler(app.handle().clone());
             // No-op unless the user has opted into the wake word.
             wake::init(app.handle());
+            // Retention otherwise only applies on the next usage write, which
+            // never comes once recording is switched off.
+            usage::enforce_retention(app.handle());
             Ok(())
         })
         .on_window_event(|window, event| {

@@ -69,7 +69,15 @@ export function useMicTranscription({
           await startCapture(device);
           recordingRef.current = true;
           setState("recording");
-          unlistenRef.current = await onMicLevel(setLevel);
+          const unlisten = await onMicLevel(setLevel);
+          // `cancel()` or unmount can land while we were subscribing: their
+          // cleanup saw a still-null ref and had nothing to drop, so assigning
+          // now would strand the listener for the life of the window.
+          if (recordingRef.current) {
+            unlistenRef.current = unlisten;
+          } else {
+            unlisten();
+          }
         } else {
           recordingRef.current = false;
           dropLevelListener();
