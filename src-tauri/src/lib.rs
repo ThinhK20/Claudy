@@ -18,6 +18,7 @@ mod stt;
 mod tray;
 mod tts;
 mod usage;
+mod vocabulary;
 mod wake;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -99,7 +100,10 @@ pub fn run() {
             wake::check_wake_phrase,
             usage::usage_summary,
             usage::clear_usage,
-            usage::list_model_prices
+            usage::list_model_prices,
+            vocabulary::preview_vocabulary,
+            vocabulary::import_vocabulary,
+            vocabulary::export_vocabulary
         ])
         .setup(|app| {
             tray::create(app.handle())?;

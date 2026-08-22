@@ -39,6 +39,16 @@ Built with Tauri 2 and React. Windows-first — macOS and Linux code paths exist
 - Download speech models inside the app, with progress bars and file checks; remove them anytime
 - Choose your microphone and try it out with the built-in test recorder
 
+### Custom vocabulary
+- Speech models are good at ordinary English and bad at the words you care about most — colleagues' names, product names, in-house jargon. Tell Claudy how to spell them once and every transcript is corrected before it reaches the app you're typing into
+- Add rules on the Transcription page: *when Claudy hears "get hub", write "GitHub"*. A **Try it** box runs your rules on a sample as you type, so you can watch one work before you rely on it
+- Rules match whole words only, so a rule for "cat" never touches "category". Capitalisation is worked out for you: a lowercase replacement follows how you said it ("teh" → "the", "Teh" → "The"), while a replacement you spelled yourself is left exactly as written — "GitHub" never comes out as "Github"
+- Leave the replacement blank to drop a word entirely — a quick way to strip "um" out of everything you dictate
+- Need a rule to be literal? Turn on **Aa** for exact-case matching, for cases like "it" → "IT"
+- Longer phrases win over shorter ones, and a correction is never re-corrected by another rule, so rules can't cascade or loop
+- Applies to dictation, spoken questions to the assistant, and the mic test. The wake word is still matched on what you actually said, so a rule can never stop "Hey Claudy" working
+- Share a rule set as a JSON file with **Import** / **Export**; importing the same file twice updates rules instead of duplicating them
+
 ### AI prompt shortcuts
 - Create prompts with their own global shortcuts. Templates can include `{{selected_text}}`, `{{clipboard}}`, `{{date}}`, and `{{time}}`
 - Works on text you select in any application: press the shortcut, and the finished result lands on your clipboard with a notification (pasting it for you is optional and off by default)

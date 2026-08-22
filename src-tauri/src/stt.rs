@@ -120,8 +120,16 @@ pub async fn transcribe_samples(
         };
 
         let started = std::time::Instant::now();
-        let text = engine.transcribe(&samples, &settings.language)?;
+        let heard = engine.transcribe(&samples, &settings.language)?;
         let duration_ms = started.elapsed().as_millis() as u64;
+
+        // The single seam every capture passes through, so dictation, the
+        // assistant's spoken questions and the mic test all get the user's
+        // corrections. Deliberately outside the timing: `duration_ms` is what
+        // the model cost, and a string pass is not model time. The wake-word
+        // listener runs its own engine and is untouched — corrections must
+        // not move the target the wake phrase is matched against.
+        let text = crate::vocabulary::apply_settings(&settings, &heard);
 
         if settings.keep_model_warm {
             *cache = Some((model_path, engine));

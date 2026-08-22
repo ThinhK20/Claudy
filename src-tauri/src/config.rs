@@ -140,6 +140,9 @@ pub struct Settings {
     pub ai: AiSettings,
     pub assistant: AssistantSettings,
     pub usage: UsageSettings,
+    /// Corrections applied to every finished transcript. Lives in
+    /// `vocabulary.rs` next to the matcher that reads it.
+    pub vocabulary: crate::vocabulary::VocabularySettings,
 }
 
 impl Default for Settings {
@@ -160,6 +163,7 @@ impl Default for Settings {
             ai: AiSettings::default(),
             assistant: AssistantSettings::default(),
             usage: UsageSettings::default(),
+            vocabulary: crate::vocabulary::VocabularySettings::default(),
         }
     }
 }
@@ -193,6 +197,7 @@ pub fn update_settings(app: AppHandle, settings: Settings) -> Result<(), String>
             "Custom system prompt exceeds {MAX_SYSTEM_PROMPT_CHARS} characters — shorten the prompt"
         ));
     }
+    crate::vocabulary::validate(&settings.vocabulary)?;
     let old = load(&app)?;
     let dictation_changed = old.dictation_shortcut != settings.dictation_shortcut;
     let assistant_changed = old.assistant.shortcut != settings.assistant.shortcut;
@@ -425,6 +430,32 @@ mod tests {
         assert!(v["usage"].get("retentionDays").is_some());
         assert!(v["usage"].get("retention_days").is_none());
         assert!(v["usage"]["modelPrices"][0].get("inputPerMtok").is_some());
+    }
+
+    #[test]
+    fn settings_written_before_custom_vocabulary_load_with_an_empty_rule_list() {
+        // No migration: the block is simply absent in existing settings.json,
+        // and its absence must leave transcription behaving exactly as before.
+        let s: Settings = serde_json::from_value(serde_json::json!({ "theme": "dark" })).unwrap();
+        assert_eq!(s.vocabulary, crate::vocabulary::VocabularySettings::default());
+        assert!(s.vocabulary.rules.is_empty());
+        assert!(s.vocabulary.enabled, "an empty list changes nothing, so leave the switch on");
+        assert_eq!(s.theme, "dark", "the rest of the settings must survive");
+    }
+
+    #[test]
+    fn vocabulary_round_trips_nested_camel_case() {
+        let json = serde_json::json!({
+            "vocabulary": { "rules": [{ "from": "get hub", "to": "GitHub", "matchCase": true }] }
+        });
+        let s: Settings = serde_json::from_value(json).unwrap();
+        assert_eq!(s.vocabulary.rules[0].to, "GitHub");
+        assert!(s.vocabulary.rules[0].match_case);
+        assert!(s.vocabulary.enabled, "missing nested field -> default");
+
+        let v = serde_json::to_value(&s).unwrap();
+        assert!(v["vocabulary"]["rules"][0].get("matchCase").is_some());
+        assert!(v["vocabulary"]["rules"][0].get("match_case").is_none());
     }
 
     #[test]

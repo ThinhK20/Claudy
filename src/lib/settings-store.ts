@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import type { ModelPrice } from "@/lib/usage-api";
+import type { VocabRule } from "@/lib/vocabulary-api";
 
 export type ProviderId = "openai_compatible" | "ollama" | "anthropic" | "gemini";
 
@@ -54,6 +55,14 @@ export interface UsageSettings {
   modelPrices: ModelPrice[];
 }
 
+/** Corrections applied to every finished transcript, before the text reaches
+ *  the app you're typing into. See `src-tauri/src/vocabulary.rs`. */
+export interface VocabularySettings {
+  /** Master switch — turns every rule off without deleting the list. */
+  enabled: boolean;
+  rules: VocabRule[];
+}
+
 export interface Settings {
   theme: "light" | "dark" | "system";
   language: string;
@@ -70,6 +79,7 @@ export interface Settings {
   ai: AiSettings;
   assistant: AssistantSettings;
   usage: UsageSettings;
+  vocabulary: VocabularySettings;
 }
 
 interface SettingsState {
