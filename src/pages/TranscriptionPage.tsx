@@ -1,6 +1,7 @@
 import { MicSettings } from "@/components/transcription/mic-settings";
 import { ModelManager } from "@/components/transcription/model-manager";
 import { TestRecorder } from "@/components/transcription/test-recorder";
+import { VocabularyManager } from "@/components/transcription/vocabulary-manager";
 
 export default function TranscriptionPage() {
   return (
@@ -13,6 +14,7 @@ export default function TranscriptionPage() {
       </div>
       <ModelManager />
       <MicSettings />
+      <VocabularyManager />
       <TestRecorder />
     </div>
   );
