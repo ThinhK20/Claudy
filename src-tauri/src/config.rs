@@ -13,12 +13,19 @@ pub const PROVIDER_IDS: [&str; 4] = ["openai_compatible", "ollama", "anthropic",
 pub struct ProviderSettings {
     pub base_url: String, // "" = provider's built-in default
     pub model: String,    // "" = provider's built-in default
+    /// Models tried, in order, when `model` is overloaded. Empty = the
+    /// provider's built-in chain (`ai::fallback::builtin_chain`).
+    pub fallback_models: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct AiSettings {
     pub active_provider: String, // one of PROVIDER_IDS
+    /// Master switch for automatic model fallback. On, an overloaded model is
+    /// transparently swapped for the next one in its chain; off restores the
+    /// old single-shot behavior of surfacing the provider's error.
+    pub model_fallback_enabled: bool,
     pub openai_compatible: ProviderSettings,
     pub ollama: ProviderSettings,
     pub anthropic: ProviderSettings,
@@ -29,6 +36,10 @@ impl Default for AiSettings {
     fn default() -> Self {
         Self {
             active_provider: "openai_compatible".into(),
+            // On by default: losing a dictation prompt to a peak-hour 503 is a
+            // worse surprise than being answered by a sibling model, and the
+            // switch is always announced.
+            model_fallback_enabled: true,
             openai_compatible: ProviderSettings::default(),
             ollama: ProviderSettings::default(),
             anthropic: ProviderSettings::default(),
@@ -319,6 +330,39 @@ mod tests {
         assert_eq!(s.ai.anthropic, ProviderSettings::default());
         let v = serde_json::to_value(&s).unwrap();
         assert!(v["ai"]["openaiCompatible"].get("baseUrl").is_some());
+    }
+
+    #[test]
+    fn settings_written_before_model_fallback_load_with_it_on_and_no_overrides() {
+        // No migration: the fields are simply absent in existing settings.json,
+        // and their absence must mean "use the built-in chain", not "never
+        // fall back".
+        let json = serde_json::json!({
+            "ai": { "activeProvider": "gemini", "gemini": { "model": "gemini-2.5-pro" } }
+        });
+        let s: Settings = serde_json::from_value(json).unwrap();
+        assert!(s.ai.model_fallback_enabled);
+        assert!(s.ai.gemini.fallback_models.is_empty());
+        assert_eq!(s.ai.gemini.model, "gemini-2.5-pro", "the rest must survive");
+    }
+
+    #[test]
+    fn model_fallback_settings_round_trip_camel_case() {
+        let json = serde_json::json!({
+            "ai": {
+                "modelFallbackEnabled": false,
+                "gemini": { "fallbackModels": ["gemini-2.5-flash", "gemini-2.0-flash"] }
+            }
+        });
+        let s: Settings = serde_json::from_value(json).unwrap();
+        assert!(!s.ai.model_fallback_enabled);
+        assert_eq!(s.ai.gemini.fallback_models, ["gemini-2.5-flash", "gemini-2.0-flash"]);
+
+        let v = serde_json::to_value(&s).unwrap();
+        assert!(v["ai"].get("modelFallbackEnabled").is_some());
+        assert!(v["ai"].get("model_fallback_enabled").is_none());
+        assert!(v["ai"]["gemini"].get("fallbackModels").is_some());
+        assert!(v["ai"]["gemini"].get("fallback_models").is_none());
     }
 
     #[test]

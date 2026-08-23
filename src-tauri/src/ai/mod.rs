@@ -1,4 +1,4 @@
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter};
 
 /// One prompt round-trip must finish inside this (spec: timeout is a
 /// reportable failure, not a hang).
@@ -187,6 +187,7 @@ pub trait AiProvider: Sync {
 }
 
 pub mod anthropic;
+pub mod fallback;
 pub mod gemini;
 pub mod ollama;
 pub mod openai_compatible;
@@ -218,6 +219,33 @@ pub fn effective_model(p: &dyn AiProvider, cfg_model: &str, reported: Option<&st
     }
 }
 
+/// A failed provider call. `retryable` means the failure looks transient and
+/// model-specific — the provider is saturated, not the account — so the same
+/// request may still succeed against another model on the same provider.
+#[derive(Debug, Clone)]
+pub struct ProviderError {
+    pub message: String,
+    pub retryable: bool,
+}
+
+impl ProviderError {
+    /// Nothing another model could fix: a bad key, a malformed request, or a
+    /// local network problem.
+    fn fatal(message: String) -> Self {
+        Self { message, retryable: false }
+    }
+}
+
+/// Statuses worth re-trying against a different model.
+///
+/// 429 is included because provider quotas are usually per-model, so a sibling
+/// model often has headroom left. 401/403 deliberately are NOT: a bad key
+/// fails identically on every model, and burning through the chain would just
+/// multiply the failures (and the Usage-page noise) for nothing.
+pub fn is_overloaded(status: u16) -> bool {
+    matches!(status, 429 | 500 | 502 | 503 | 504 | 529)
+}
+
 /// Human-readable reason for a non-2xx response (spec: auth / rate-limit /
 /// other, with the provider's own message when it sends JSON).
 pub fn friendly_http_error(status: u16, body: &str) -> String {
@@ -233,33 +261,45 @@ pub fn friendly_http_error(status: u16, body: &str) -> String {
     match status {
         401 | 403 => format!("Authentication failed — check your API key ({detail})"),
         429 => format!("Rate limited by the provider ({detail})"),
+        // Peak-hour saturation. The wording is load-bearing: `ErrorKind::classify`
+        // matches "is overloaded" to bucket these on the Usage page.
+        500 | 502 | 503 | 504 | 529 => {
+            format!("Provider is overloaded (HTTP {status}: {detail})")
+        }
         _ => format!("Provider returned HTTP {status}: {detail}"),
     }
 }
 
 /// Execute a built request; returns the raw success body.
-pub async fn send(req: HttpRequest) -> Result<String, String> {
+///
+/// Transport failures are never `retryable`: a timeout would spend another
+/// full `REQUEST_TIMEOUT_SECS` on a guess, and a connect error is local — no
+/// model on any provider can fix either.
+pub async fn send(req: HttpRequest) -> Result<String, ProviderError> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(REQUEST_TIMEOUT_SECS))
         .build()
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| ProviderError::fatal(e.to_string()))?;
     let mut r = client.post(&req.url).json(&req.body);
     for (name, value) in &req.headers {
         r = r.header(*name, value);
     }
     let resp = r.send().await.map_err(|e| {
-        if e.is_timeout() {
+        ProviderError::fatal(if e.is_timeout() {
             format!("Request timed out after {REQUEST_TIMEOUT_SECS} s")
         } else if e.is_connect() {
             format!("Could not connect to {}", req.url)
         } else {
             e.to_string()
-        }
+        })
     })?;
     let status = resp.status().as_u16();
-    let body = resp.text().await.map_err(|e| e.to_string())?;
+    let body = resp.text().await.map_err(|e| ProviderError::fatal(e.to_string()))?;
     if !(200..300).contains(&status) {
-        return Err(friendly_http_error(status, &body));
+        return Err(ProviderError {
+            message: friendly_http_error(status, &body),
+            retryable: is_overloaded(status),
+        });
     }
     Ok(body)
 }
@@ -316,12 +356,112 @@ fn record_usage(
     crate::usage::record(app, event);
 }
 
+/// One round-trip against one model. `started` rides along so the usage log
+/// times each attempt separately instead of billing the whole chain to the
+/// model that happened to answer.
+pub(crate) struct Attempt {
+    pub model: String,
+    pub started: std::time::Instant,
+    pub usage: Option<ResponseUsage>,
+    pub outcome: Result<String, ProviderError>,
+}
+
+/// Try each candidate model in order, stopping at the first success or the
+/// first failure another model could not fix.
+///
+/// Takes no `AppHandle` on purpose: the whole fallback behaviour is then
+/// testable against a mock server without a Tauri runtime.
+pub(crate) async fn attempt_chain(
+    p: &dyn AiProvider,
+    cfg: &crate::config::ProviderSettings,
+    api_key: Option<&str>,
+    prompt: &str,
+    opts: &RequestOptions,
+    candidates: &[String],
+) -> Vec<Attempt> {
+    let mut attempts = Vec::with_capacity(candidates.len());
+    for model in candidates {
+        // Every provider reads the model off `cfg` — gemini into the URL, the
+        // other three into the body — so swapping it here is all it takes.
+        let cfg = crate::config::ProviderSettings { model: model.clone(), ..cfg.clone() };
+        let started = std::time::Instant::now();
+
+        // Usage survives a `parse_response` failure: the provider still billed
+        // the tokens even when we couldn't read the answer.
+        let mut usage: Option<ResponseUsage> = None;
+        let outcome = match p.build_request_with(&cfg, api_key, prompt, opts.clone()) {
+            Err(e) => Err(ProviderError::fatal(e)),
+            Ok(req) => match send(req).await {
+                Err(e) => Err(e),
+                Ok(body) => {
+                    usage = p.parse_usage(&body);
+                    p.parse_response(&body).map_err(ProviderError::fatal)
+                }
+            },
+        };
+
+        let keep_going = outcome.as_ref().err().is_some_and(|e| e.retryable);
+        attempts.push(Attempt { model: model.clone(), started, usage, outcome });
+        if !keep_going {
+            break;
+        }
+    }
+    attempts
+}
+
+/// Emitted whenever a request was served by a model other than the configured
+/// one, so an open window can explain the answer it is showing.
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FallbackEvent {
+    pub provider: String,
+    pub from: String,
+    pub to: String,
+}
+
+pub const FALLBACK_EVENT: &str = "ai-fallback";
+
+/// Tell the user their model was swapped out from under them.
+///
+/// The event fires on every fallback — a panel should always be able to name
+/// the model that answered. The desktop notification fires only on the FIRST
+/// failure of a cooldown window, or a peak-hour outage would produce one toast
+/// per request. Both are fire-and-forget: warning about a completion must
+/// never be able to fail it.
+fn announce_fallback(
+    app: &AppHandle,
+    notifications_enabled: bool,
+    provider_id: &str,
+    from: &str,
+    to: &str,
+    first_failure: bool,
+) {
+    let _ = app.emit(
+        FALLBACK_EVENT,
+        FallbackEvent {
+            provider: provider_id.to_string(),
+            from: from.to_string(),
+            to: to.to_string(),
+        },
+    );
+    if first_failure {
+        let minutes = fallback::COOLDOWN_SECS / 60;
+        crate::notify::send(
+            app,
+            notifications_enabled,
+            &format!("{from} is overloaded — using {to} for the next {minutes} minutes."),
+        );
+    }
+}
+
 /// Core completion against a SPECIFIC provider with explicit request options.
 /// Uses `build_request_with`, so a provider that ignores options behaves
 /// exactly as before.
 ///
-/// Every outcome past the config load is recorded — including failures, which
-/// is the whole point of the Failures tile on the Usage page.
+/// When the configured model is overloaded this walks its fallback chain
+/// rather than failing (see `fallback`). Every attempt past the config load is
+/// recorded — including the failures, which is the whole point of the Failures
+/// tile on the Usage page.
 pub async fn complete_provider_with_options(
     app: &AppHandle,
     provider_id: &str,
@@ -329,45 +469,94 @@ pub async fn complete_provider_with_options(
     opts: RequestOptions,
     source: UsageSource,
 ) -> Result<String, String> {
+    complete_core(app, provider_id, prompt, opts, source, true).await
+}
+
+/// `complete_provider_with_options` with the fallback chain switchable off for
+/// this one call, whatever the setting says. Only the connection test wants
+/// that: it exists to prove the CONFIGURED model works, so being rescued by a
+/// sibling would make it report a success the user does not have.
+async fn complete_core(
+    app: &AppHandle,
+    provider_id: &str,
+    prompt: &str,
+    opts: RequestOptions,
+    source: UsageSource,
+    allow_fallback: bool,
+) -> Result<String, String> {
     let settings = crate::config::load(app)?;
     let p = provider(provider_id)?;
     let cfg = settings.ai.provider(provider_id)?;
     let key = crate::secrets::get(provider_id)?;
-    let started = std::time::Instant::now();
 
-    // Usage survives a `parse_response` failure: the provider still billed the
-    // tokens even when we couldn't read the answer.
-    let mut usage: Option<ResponseUsage> = None;
-    let built = if p.requires_api_key() && key.is_none() {
-        Err(format!("No API key configured for {provider_id} — add one on the Providers page"))
+    // A missing key fails identically on every model, so it must never spend
+    // the chain. Recorded like any other failure.
+    if p.requires_api_key() && key.is_none() {
+        let e = format!("No API key configured for {provider_id} — add one on the Providers page");
+        let model = effective_model(p, &cfg.model, None);
+        record_usage(app, &source, provider_id, &model, std::time::Instant::now(), None, Some(&e));
+        return Err(e);
+    }
+
+    // What the user actually picked — the yardstick for "did we substitute?",
+    // independent of how `candidates` reorders around cooldowns.
+    let configured = or_default(&cfg.model, p.default_model()).to_string();
+    let candidates = if allow_fallback && settings.ai.model_fallback_enabled {
+        fallback::candidates(provider_id, &cfg.model, &cfg.fallback_models, p.default_model())
     } else {
-        p.build_request_with(cfg, key.as_deref(), prompt, opts)
-    };
-    let outcome = match built {
-        Err(e) => Err(e),
-        Ok(req) => match send(req).await {
-            Err(e) => Err(e),
-            Ok(body) => {
-                usage = p.parse_usage(&body);
-                p.parse_response(&body)
-            }
-        },
+        vec![configured.clone()]
     };
 
-    record_usage(
-        app,
-        &source,
-        provider_id,
-        &effective_model(p, &cfg.model, usage.as_ref().and_then(|u| u.model.as_deref())),
-        started,
-        usage.as_ref(),
-        outcome.as_ref().err().map(String::as_str),
-    );
-    outcome
+    let attempts = attempt_chain(p, cfg, key.as_deref(), prompt, &opts, &candidates).await;
+
+    // `true` once the chain took a model OUT of service, as opposed to finding
+    // it already cooling from an earlier request. Gates the desktop toast.
+    let mut first_failure = false;
+    for a in &attempts {
+        record_usage(
+            app,
+            &source,
+            provider_id,
+            &effective_model(p, &a.model, a.usage.as_ref().and_then(|u| u.model.as_deref())),
+            a.started,
+            a.usage.as_ref(),
+            a.outcome.as_ref().err().map(|e| e.message.as_str()),
+        );
+        match &a.outcome {
+            // It answered, so it is healthy — end any cooldown early.
+            Ok(_) => fallback::clear(provider_id, &a.model),
+            Err(e) if e.retryable => {
+                first_failure |= fallback::mark_overloaded(provider_id, &a.model);
+            }
+            Err(_) => {}
+        }
+    }
+
+    // `candidates` is never empty, so neither is `attempts`; the guard is here
+    // so a future caller can't turn that invariant into a panic.
+    let Some(last) = attempts.last() else {
+        return Err(format!("No model configured for {provider_id}"));
+    };
+    match &last.outcome {
+        Ok(answer) => {
+            if last.model != configured {
+                announce_fallback(
+                    app,
+                    settings.notifications_enabled,
+                    provider_id,
+                    &configured,
+                    &last.model,
+                    first_failure,
+                );
+            }
+            Ok(answer.clone())
+        }
+        Err(e) => Err(e.message.clone()),
+    }
 }
 
-/// Full completion against a SPECIFIC provider (Task 4's `test_provider`
-/// uses this directly). No request options — plain behavior.
+/// Full completion against a SPECIFIC provider. No request options — plain
+/// behavior, fallback chain included.
 pub async fn complete_with(
     app: &AppHandle,
     provider_id: &str,
@@ -420,12 +609,21 @@ pub fn active_provider_supports_images(app: AppHandle) -> Result<bool, String> {
 }
 
 /// Connection test for the Providers page: cheapest possible round trip
-/// that proves endpoint + key + model all work.
+/// that proves endpoint + key + model all work. Deliberately does NOT fall
+/// back — a green result has to mean the model you configured answered.
 #[tauri::command]
 pub async fn test_provider(app: AppHandle, provider_id: String) -> Result<String, String> {
     // NotRecorded: a connection test is plumbing, not usage — counting it
     // would inflate the run count every time you visit the Providers page.
-    complete_with(&app, &provider_id, "Reply with exactly: OK", UsageSource::NotRecorded).await
+    complete_core(
+        &app,
+        &provider_id,
+        "Reply with exactly: OK",
+        RequestOptions::default(),
+        UsageSource::NotRecorded,
+        false,
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -462,6 +660,7 @@ mod tests {
         let cfg = crate::config::ProviderSettings {
             base_url: "http://x/v1".into(),
             model: "m".into(),
+            ..Default::default()
         };
         for id in ["ollama", "openai_compatible"] {
             let p = provider(id).unwrap();
@@ -495,6 +694,7 @@ mod tests {
         let cfg = crate::config::ProviderSettings {
             base_url: "http://x/v1".into(),
             model: "m".into(),
+            ..Default::default()
         };
         for id in crate::config::PROVIDER_IDS {
             let p = provider(id).unwrap();
@@ -530,6 +730,7 @@ mod tests {
         let cfg = crate::config::ProviderSettings {
             base_url: "http://x/v1".into(),
             model: "m".into(),
+            ..Default::default()
         };
         let opts = RequestOptions { history: sample_history(), ..Default::default() };
         for id in crate::config::PROVIDER_IDS {
@@ -645,6 +846,7 @@ mod tests {
         let cfg = crate::config::ProviderSettings {
             base_url: format!("{}/v1", server.base_url()),
             model: "m".into(),
+            ..Default::default()
         };
         let p = provider("openai_compatible").unwrap();
         let req = p.build_request(&cfg, Some("test-key"), "ping").unwrap();
@@ -664,10 +866,134 @@ mod tests {
         let cfg = crate::config::ProviderSettings {
             base_url: format!("{}/v1", server.base_url()),
             model: "m".into(),
+            ..Default::default()
         };
         let p = provider("openai_compatible").unwrap();
         let req = p.build_request(&cfg, Some("bad"), "ping").unwrap();
         let err = send(req).await.unwrap_err();
-        assert!(err.contains("Authentication failed") && err.contains("invalid api key"), "got: {err}");
+        assert!(
+            err.message.contains("Authentication failed") && err.message.contains("invalid api key"),
+            "got: {}",
+            err.message
+        );
+        assert!(!err.retryable, "a bad key fails on every model — never walk the chain");
+    }
+
+    #[test]
+    fn only_saturation_statuses_are_worth_another_model() {
+        // Overloaded, gateway-level, and Anthropic's 529. 429 counts because
+        // provider quotas are usually per-model.
+        for status in [429, 500, 502, 503, 504, 529] {
+            assert!(is_overloaded(status), "{status} should fall back");
+        }
+        // A bad key, a malformed body, or a model that does not exist: every
+        // model on the chain would fail exactly the same way.
+        for status in [400, 401, 403, 404, 413, 422] {
+            assert!(!is_overloaded(status), "{status} must not fall back");
+        }
+    }
+
+    #[test]
+    fn overload_errors_are_phrased_so_the_usage_log_can_bucket_them() {
+        let e = friendly_http_error(503, r#"{"error":{"message":"The model is overloaded."}}"#);
+        assert!(e.contains("is overloaded"), "got: {e}");
+        assert!(e.contains("The model is overloaded."), "the provider's own words must survive");
+        assert_eq!(crate::usage::ErrorKind::classify(&e), crate::usage::ErrorKind::Overloaded);
+        // Anthropic's non-standard code gets the same treatment.
+        assert!(friendly_http_error(529, "{}").contains("is overloaded"));
+    }
+
+    /// An OpenAI-shaped mock that fails one model and serves another, which is
+    /// exactly the peak-hour shape this feature exists for.
+    fn chain_server(bad_model: &str, bad_status: u16) -> httpmock::MockServer {
+        let server = httpmock::MockServer::start();
+        let bad = bad_model.to_string();
+        server.mock(|when, then| {
+            when.method(httpmock::Method::POST)
+                .path("/v1/chat/completions")
+                .json_body_partial(format!(r#"{{"model":"{bad}"}}"#));
+            then.status(bad_status)
+                .json_body(serde_json::json!({ "error": { "message": "overloaded" } }));
+        });
+        server.mock(|when, then| {
+            when.method(httpmock::Method::POST)
+                .path("/v1/chat/completions")
+                .json_body_partial(r#"{"model":"spare"}"#);
+            then.status(200).json_body(serde_json::json!({
+                "choices": [{ "message": { "role": "assistant", "content": "OK" } }]
+            }));
+        });
+        server
+    }
+
+    fn chain_cfg(server: &httpmock::MockServer) -> crate::config::ProviderSettings {
+        crate::config::ProviderSettings {
+            base_url: format!("{}/v1", server.base_url()),
+            model: "busy".into(),
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn an_overloaded_model_is_answered_by_the_next_one_in_the_chain() {
+        let server = chain_server("busy", 503);
+        let cfg = chain_cfg(&server);
+        let p = provider("openai_compatible").unwrap();
+        let candidates = vec!["busy".to_string(), "spare".to_string()];
+        let attempts =
+            attempt_chain(p, &cfg, Some("k"), "ping", &RequestOptions::default(), &candidates).await;
+
+        assert_eq!(attempts.len(), 2, "the chain should have moved on after the 503");
+        assert_eq!(attempts[0].model, "busy");
+        assert!(attempts[0].outcome.as_ref().unwrap_err().retryable);
+        assert_eq!(attempts[1].model, "spare");
+        assert_eq!(attempts[1].outcome.as_ref().unwrap(), "OK", "the spare model's answer");
+    }
+
+    #[tokio::test]
+    async fn a_rate_limited_model_also_falls_through_to_the_next() {
+        // 429 is the other peak-hour face of the same problem.
+        let server = chain_server("busy", 429);
+        let cfg = chain_cfg(&server);
+        let p = provider("openai_compatible").unwrap();
+        let candidates = vec!["busy".to_string(), "spare".to_string()];
+        let attempts =
+            attempt_chain(p, &cfg, Some("k"), "ping", &RequestOptions::default(), &candidates).await;
+        assert_eq!(attempts.len(), 2);
+        assert!(attempts[1].outcome.is_ok());
+    }
+
+    #[tokio::test]
+    async fn an_auth_failure_stops_the_chain_after_one_attempt() {
+        // Walking the chain on a bad key would multiply one failure into four
+        // — same error, four times the latency and four Usage-page rows.
+        let server = chain_server("busy", 401);
+        let cfg = chain_cfg(&server);
+        let p = provider("openai_compatible").unwrap();
+        let candidates = vec!["busy".to_string(), "spare".to_string()];
+        let attempts =
+            attempt_chain(p, &cfg, Some("k"), "ping", &RequestOptions::default(), &candidates).await;
+
+        assert_eq!(attempts.len(), 1, "an auth failure must not burn the chain");
+        assert!(!attempts[0].outcome.as_ref().unwrap_err().retryable);
+    }
+
+    #[tokio::test]
+    async fn a_single_candidate_behaves_exactly_like_the_old_single_shot() {
+        let server = chain_server("busy", 503);
+        let cfg = chain_cfg(&server);
+        let p = provider("openai_compatible").unwrap();
+        let attempts = attempt_chain(
+            p,
+            &cfg,
+            Some("k"),
+            "ping",
+            &RequestOptions::default(),
+            &["busy".to_string()],
+        )
+        .await;
+        assert_eq!(attempts.len(), 1);
+        let err = attempts[0].outcome.as_ref().unwrap_err();
+        assert!(err.message.contains("is overloaded"), "got: {}", err.message);
     }
 }

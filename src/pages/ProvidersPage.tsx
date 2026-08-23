@@ -11,20 +11,34 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { ToggleRow } from "@/components/toggle-row";
 import { hasApiKey, setApiKey, testProvider } from "@/lib/ai-api";
+import { formatModelList, parseModelList } from "@/lib/model-list";
 import {
   useSettings,
   type AiSettings,
   type ProviderId,
+  type ProviderSettings,
   type Settings,
 } from "@/lib/settings-store";
 
+/** The `AiSettings` keys that hold a provider block, as opposed to the
+    scalar switches sitting beside them. Derived rather than hand-listed so a
+    new switch cannot silently widen it. */
+type ProviderKey = {
+  [K in keyof AiSettings]: AiSettings[K] extends ProviderSettings ? K : never;
+}[keyof AiSettings];
+
 interface ProviderMeta {
   id: ProviderId;
-  settingsKey: keyof Omit<AiSettings, "activeProvider">;
+  settingsKey: ProviderKey;
   label: string;
   defaultBaseUrl: string;
   defaultModel: string;
+  /** Mirrors `ai::fallback::builtin_chain` in Rust; shown as the placeholder
+      so the user can see what an empty field will actually do. Display only —
+      the backend never reads it. */
+  defaultFallbacks: string[];
   keyHint: string;
 }
 
@@ -35,6 +49,7 @@ const PROVIDERS: ProviderMeta[] = [
     label: "OpenAI-compatible",
     defaultBaseUrl: "https://api.openai.com/v1",
     defaultModel: "gpt-4o-mini",
+    defaultFallbacks: [],
     keyHint: "Optional for local servers (LM Studio, llama.cpp)",
   },
   {
@@ -43,6 +58,7 @@ const PROVIDERS: ProviderMeta[] = [
     label: "Ollama",
     defaultBaseUrl: "http://localhost:11434",
     defaultModel: "llama3.2",
+    defaultFallbacks: [],
     keyHint: "Not used by Ollama",
   },
   {
@@ -51,6 +67,7 @@ const PROVIDERS: ProviderMeta[] = [
     label: "Anthropic",
     defaultBaseUrl: "https://api.anthropic.com",
     defaultModel: "claude-sonnet-5",
+    defaultFallbacks: ["claude-sonnet-5", "claude-haiku-4-5-20251001"],
     keyHint: "Required",
   },
   {
@@ -59,6 +76,7 @@ const PROVIDERS: ProviderMeta[] = [
     label: "Google Gemini",
     defaultBaseUrl: "https://generativelanguage.googleapis.com",
     defaultModel: "gemini-2.5-flash",
+    defaultFallbacks: ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash"],
     keyHint: "Required",
   },
 ];
@@ -120,8 +138,9 @@ export default function ProvidersPage() {
     }
   };
 
-  const patchProvider = (patch: Partial<{ baseUrl: string; model: string }>) =>
-    void safeUpdate({ ai: { ...settings.ai, [meta.settingsKey]: { ...cfg, ...patch } } });
+  const patchProvider = (
+    patch: Partial<{ baseUrl: string; model: string; fallbackModels: string[] }>,
+  ) => void safeUpdate({ ai: { ...settings.ai, [meta.settingsKey]: { ...cfg, ...patch } } });
 
   const setActive = () =>
     void safeUpdate({ ai: { ...settings.ai, activeProvider: meta.id } });
@@ -209,6 +228,43 @@ export default function ProvidersPage() {
               onBlur={(e) => patchProvider({ model: e.target.value.trim() })}
             />
           </div>
+          <div className="flex items-center gap-3">
+            <Label className="w-28 shrink-0">Fallback models</Label>
+            <Input
+              key={`${meta.id}-fallbackModels`}
+              defaultValue={formatModelList(cfg.fallbackModels)}
+              placeholder={
+                meta.defaultFallbacks.length > 0
+                  ? formatModelList(meta.defaultFallbacks)
+                  : "none — add models to enable fallback"
+              }
+              onBlur={(e) => patchProvider({ fallbackModels: parseModelList(e.target.value) })}
+            />
+          </div>
+          <p className="text-muted-foreground text-sm">
+            Comma-separated, tried in order when {meta.label} reports the model is
+            overloaded. Leave empty to use the placeholder.
+          </p>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Overload handling</CardTitle>
+          <CardDescription>
+            At peak hours providers reject requests with &ldquo;the model is
+            overloaded&rdquo;. Applies to every provider, not just {meta.label}.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <ToggleRow
+            label="Switch models automatically when overloaded"
+            description="Retries with the next fallback model and tells you which one answered. The overloaded model is skipped for a few minutes, then preferred again."
+            checked={settings.ai.modelFallbackEnabled}
+            onChange={(checked) =>
+              void safeUpdate({ ai: { ...settings.ai, modelFallbackEnabled: checked } })
+            }
+          />
         </CardContent>
       </Card>
 

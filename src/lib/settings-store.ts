@@ -8,10 +8,14 @@ export type ProviderId = "openai_compatible" | "ollama" | "anthropic" | "gemini"
 export interface ProviderSettings {
   baseUrl: string;
   model: string;
+  /** Tried in order when `model` is overloaded. Empty = the built-in chain. */
+  fallbackModels: string[];
 }
 
 export interface AiSettings {
   activeProvider: ProviderId;
+  /** Off restores the old behavior: an overloaded model just fails. */
+  modelFallbackEnabled: boolean;
   openaiCompatible: ProviderSettings;
   ollama: ProviderSettings;
   anthropic: ProviderSettings;

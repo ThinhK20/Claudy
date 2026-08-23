@@ -108,7 +108,7 @@ mod tests {
     use crate::config::ProviderSettings;
 
     fn cfg(base_url: &str, model: &str) -> ProviderSettings {
-        ProviderSettings { base_url: base_url.into(), model: model.into() }
+        ProviderSettings { base_url: base_url.into(), model: model.into(), ..Default::default() }
     }
 
     #[test]

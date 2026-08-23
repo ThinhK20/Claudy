@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { ProviderId } from "@/lib/settings-store";
 
 // --- API keys (Task 2) — the key is write-only; it never comes back. ---
@@ -17,6 +18,25 @@ export const deleteApiKey = (provider: ProviderId): Promise<void> =>
 /** Cheapest full round trip: endpoint + key + model. Resolves to the model's reply. */
 export const testProvider = (providerId: ProviderId): Promise<string> =>
   invoke("test_provider", { providerId });
+
+// --- Model fallback (overloaded providers) ---
+
+/** A request was served by a model other than the configured one. */
+export interface AiFallbackEvent {
+  provider: ProviderId;
+  /** The model the user picked. */
+  from: string;
+  /** The model that actually answered. */
+  to: string;
+}
+
+/**
+ * Fires on every fallback, so any open window can explain the answer it is
+ * showing. The desktop notification is sent separately by the backend, and
+ * only once per cooldown.
+ */
+export const onAiFallback = (cb: (event: AiFallbackEvent) => void): Promise<UnlistenFn> =>
+  listen<AiFallbackEvent>("ai-fallback", (event) => cb(event.payload));
 
 // --- Prompts (Tasks 5/7) — consumed by the Phase 5 prompt manager. ---
 
