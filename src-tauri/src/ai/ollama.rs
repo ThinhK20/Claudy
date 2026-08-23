@@ -104,7 +104,7 @@ mod tests {
 
     #[test]
     fn builds_a_non_streaming_chat_request_without_auth() {
-        let cfg = ProviderSettings { base_url: "http://box:11434/".into(), model: "phi3".into() };
+        let cfg = ProviderSettings { base_url: "http://box:11434/".into(), model: "phi3".into(), ..Default::default() };
         let req = Ollama.build_request(&cfg, None, "Hi").unwrap();
         assert_eq!(req.url, "http://box:11434/api/chat");
         assert!(req.headers.is_empty());
@@ -232,7 +232,7 @@ mod tests {
 
     #[test]
     fn stream_flag_and_model_survive_history() {
-        let cfg = ProviderSettings { base_url: String::new(), model: "phi3".into() };
+        let cfg = ProviderSettings { base_url: String::new(), model: "phi3".into(), ..Default::default() };
         let req = Ollama
             .build_request_with(
                 &cfg,

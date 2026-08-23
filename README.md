@@ -76,6 +76,13 @@ Built with Tauri 2 and React. Windows-first — macOS and Linux code paths exist
 - Anything that came due while Claudy was closed notifies as soon as you start it, marked overdue
 - The **Reminders** page lists everything: snooze, mark done, edit the time, or add one by hand
 
+### When a model is overloaded
+- At peak hours AI services turn requests away with *"the model is overloaded, try again later"*. Rather than losing the prompt you just ran, Claudy retries against the next model you've listed for that service and carries on
+- The switch is always announced: a tray notification, and a line in the ask box naming the model that actually answered
+- The overloaded model is skipped for the next few minutes, then preferred again automatically — so one bad spell doesn't cost every later request a wasted round trip
+- Every cloud service has a sensible chain built in; set your own order per service on the **Providers** page, or turn the whole thing off there
+- A rejected key or a malformed request never triggers this — those would fail on every model, so Claudy reports them straight away as before
+
 ### Usage stats
 - A **Usage** page shows how many prompts you ran per day, which ones you use most, how many tokens went in and out, and roughly what it cost
 - Cost comes from a built-in price list per model, and every price is editable — so a provider's change, or a model Claudy hasn't heard of, is a one-line fix. Models running on your own machine (Ollama) count as free, and a model with no price shows its tokens rather than a made-up figure

@@ -13,6 +13,7 @@ import {
   Paperclip,
   RotateCw,
   Square,
+  TriangleAlert,
   Volume2,
   X,
 } from "lucide-react";
@@ -30,6 +31,7 @@ import {
 } from "@/lib/silence-detector";
 import { isEffectivelyEmpty } from "@/lib/transcript";
 import { followUpHint } from "@/lib/assistant-session";
+import { onAiFallback } from "@/lib/ai-api";
 import {
   activeProviderSupportsImages,
   askAssistant,
@@ -100,6 +102,9 @@ function AssistantPanel() {
   const [answer, setAnswer] = useState("");
   const [message, setMessage] = useState<string | null>(null);
   const [ttsError, setTtsError] = useState<string | null>(null);
+  // A degraded-but-successful answer, like ttsError: the provider was
+  // overloaded and a different model replied.
+  const [modelNote, setModelNote] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [supportsImages, setSupportsImages] = useState(true);
@@ -154,10 +159,17 @@ function AssistantPanel() {
         setSavingReminder(false);
         setVoiceStage(s.voice ? "starting" : "off");
         setVoiceNote(null);
+        setModelNote(null);
       }
+    });
+    // Global, not part of assistant-state: the swap happens inside the AI
+    // layer, which serves the prompt shortcuts and reminders too.
+    const unFallback = onAiFallback((e) => {
+      setModelNote(`${e.from} was overloaded — answered with ${e.to}`);
     });
     return () => {
       un.then((f) => f());
+      unFallback.then((f) => f());
     };
   }, [load]);
 
@@ -574,6 +586,7 @@ function AssistantPanel() {
           answer={answer}
           message={message}
           ttsError={ttsError}
+          modelNote={modelNote}
           panelCloseSecs={panelCloseSecs}
           keepOpenWhileSpeaking={keepOpenWhileSpeaking}
           onRetry={() => question.trim() && void askAssistant(question)}
@@ -656,6 +669,7 @@ interface ResponsePanelProps {
   answer: string;
   message: string | null;
   ttsError: string | null;
+  modelNote: string | null;
   panelCloseSecs: number;
   keepOpenWhileSpeaking: boolean;
   onRetry: () => void;
@@ -667,6 +681,7 @@ function ResponsePanel({
   answer,
   message,
   ttsError,
+  modelNote,
   panelCloseSecs,
   keepOpenWhileSpeaking,
   onRetry,
@@ -745,6 +760,15 @@ function ResponsePanel({
           </Markdown>
         )}
       </div>
+
+      {/* Not an error: the answer above is real, it just came from a
+          different model than the one configured. */}
+      {modelNote && (
+        <p className="text-muted-foreground border-border flex shrink-0 items-start gap-1.5 border-t px-3 py-1.5 text-xs">
+          <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          {modelNote}
+        </p>
+      )}
 
       {ttsError && (
         <p className="text-muted-foreground border-border shrink-0 border-t px-3 py-1.5 text-xs">

@@ -137,7 +137,7 @@ mod tests {
 
     #[test]
     fn builds_a_messages_request_with_version_header_and_max_tokens() {
-        let cfg = ProviderSettings { base_url: String::new(), model: String::new() };
+        let cfg = ProviderSettings { base_url: String::new(), model: String::new(), ..Default::default() };
         let req = Anthropic.build_request(&cfg, Some("sk-ant"), "Hi").unwrap();
         assert_eq!(req.url, format!("{DEFAULT_BASE_URL}/v1/messages"));
         assert!(req.headers.contains(&("x-api-key", "sk-ant".into())));

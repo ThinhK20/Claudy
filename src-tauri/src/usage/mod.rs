@@ -95,6 +95,10 @@ pub enum ErrorKind {
     Auth,
     RateLimit,
     Timeout,
+    /// The provider was saturated (503/529 and friends). Split out from
+    /// `Other` because it is the one failure the app can act on by itself —
+    /// see `ai::fallback`.
+    Overloaded,
     Other,
 }
 
@@ -108,6 +112,7 @@ impl ErrorKind {
             Self::Auth => "auth",
             Self::RateLimit => "rateLimit",
             Self::Timeout => "timeout",
+            Self::Overloaded => "overloaded",
             Self::Other => "other",
         }
     }
@@ -122,6 +127,8 @@ impl ErrorKind {
             Self::RateLimit
         } else if m.contains("timed out") {
             Self::Timeout
+        } else if m.contains("is overloaded") {
+            Self::Overloaded
         } else {
             Self::Other
         }
@@ -134,6 +141,7 @@ impl<'de> Deserialize<'de> for ErrorKind {
             "auth" => Self::Auth,
             "rateLimit" => Self::RateLimit,
             "timeout" => Self::Timeout,
+            "overloaded" => Self::Overloaded,
             "other" => Self::Other,
             _ => Self::None,
         })
@@ -533,6 +541,7 @@ mod tests {
             ErrorKind::Auth,
             ErrorKind::RateLimit,
             ErrorKind::Timeout,
+            ErrorKind::Overloaded,
             ErrorKind::Other,
         ] {
             let wire = serde_json::to_value(k).unwrap();
@@ -557,7 +566,12 @@ mod tests {
             ErrorKind::RateLimit
         );
         assert_eq!(ErrorKind::classify("Request timed out after 60 s"), ErrorKind::Timeout);
-        assert_eq!(ErrorKind::classify("Provider returned HTTP 500: boom"), ErrorKind::Other);
+        assert_eq!(
+            ErrorKind::classify("Provider is overloaded (HTTP 503: The model is overloaded.)"),
+            ErrorKind::Overloaded
+        );
+        // A status with no arm of its own still lands in the catch-all.
+        assert_eq!(ErrorKind::classify("Provider returned HTTP 400: boom"), ErrorKind::Other);
     }
 
     #[test]

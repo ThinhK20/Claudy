@@ -143,7 +143,7 @@ mod tests {
 
     #[test]
     fn builds_a_generate_content_request_with_goog_api_key_header() {
-        let cfg = ProviderSettings { base_url: String::new(), model: "gemini-2.5-pro".into() };
+        let cfg = ProviderSettings { base_url: String::new(), model: "gemini-2.5-pro".into(), ..Default::default() };
         let req = Gemini.build_request(&cfg, Some("g-key"), "Hi").unwrap();
         assert_eq!(
             req.url,
