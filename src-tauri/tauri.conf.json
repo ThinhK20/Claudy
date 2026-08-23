@@ -19,7 +19,8 @@
         "height": 640,
         "minWidth": 800,
         "minHeight": 560,
-        "center": true
+        "center": true,
+        "visible": false
       },
       {
         "label": "overlay",

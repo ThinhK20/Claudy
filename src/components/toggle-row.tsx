@@ -8,9 +8,17 @@ interface ToggleRowProps {
   description: string;
   checked: boolean;
   onChange: (checked: boolean) => void;
+  /** Greys out the switch while its real value is still being read. */
+  disabled?: boolean;
 }
 
-export function ToggleRow({ label, description, checked, onChange }: ToggleRowProps) {
+export function ToggleRow({
+  label,
+  description,
+  checked,
+  onChange,
+  disabled,
+}: ToggleRowProps) {
   // Generated rather than passed in: every call site would otherwise have to
   // invent a unique string, and a duplicate would silently point two rows'
   // labels at the same switch. `useId` is stable across re-renders.
@@ -32,6 +40,7 @@ export function ToggleRow({ label, description, checked, onChange }: ToggleRowPr
         aria-describedby={descriptionId}
         checked={checked}
         onCheckedChange={onChange}
+        disabled={disabled}
       />
     </div>
   );
