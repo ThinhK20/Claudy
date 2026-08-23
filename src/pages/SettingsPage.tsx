@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Card,
   CardContent,
@@ -30,6 +30,7 @@ import { ShortcutInput } from "@/components/shortcut-input";
 import { ToggleRow } from "@/components/toggle-row";
 import { useSettings, type Settings } from "@/lib/settings-store";
 import { clearUsage } from "@/lib/usage-api";
+import { isAutostartEnabled, setAutostart } from "@/lib/autostart-api";
 
 const THEMES: { value: Settings["theme"]; label: string }[] = [
   { value: "system", label: "System" },
@@ -55,6 +56,15 @@ export default function SettingsPage() {
   const update = useSettings((s) => s.update);
   const load = useSettings((s) => s.load);
   const [error, setError] = useState<string | null>(null);
+  // null until the first read resolves. Not in the settings store: the OS
+  // owns this value, so it is read back from there rather than cached.
+  const [autostart, setAutostartState] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    void isAutostartEnabled()
+      .then(setAutostartState)
+      .catch((e: unknown) => setError(String(e)));
+  }, []);
 
   if (!settings) return null;
 
@@ -69,6 +79,24 @@ export default function SettingsPage() {
         await load();
       } catch (reloadError: unknown) {
         setError(`${String(e)} (could not refresh settings: ${String(reloadError)})`);
+      }
+    }
+  };
+
+  // Same optimistic-then-reconcile shape as safeUpdate, but the truth is read
+  // back from the OS instead of from the settings store.
+  const toggleAutostart = async (on: boolean) => {
+    setError(null);
+    setAutostartState(on);
+    try {
+      await setAutostart(on);
+    } catch (e: unknown) {
+      setError(String(e));
+      try {
+        setAutostartState(await isAutostartEnabled());
+      } catch {
+        // Reading it back failed too; leave the switch as the user left it
+        // rather than guessing, the error above already says what happened.
       }
     }
   };
@@ -167,6 +195,13 @@ export default function SettingsPage() {
           <CardDescription>How Claudy delivers results and starts up</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-5">
+          <ToggleRow
+            label="Start with Windows"
+            description="Launch Claudy into the tray when you sign in, so your shortcuts work straight away"
+            checked={autostart ?? false}
+            disabled={autostart === null}
+            onChange={(v) => void toggleAutostart(v)}
+          />
           <ToggleRow
             label="Notifications"
             description="Show a desktop notification for results and errors"

@@ -91,6 +91,7 @@ Built with Tauri 2 and React. Windows-first — macOS and Linux code paths exist
 
 ### App
 - Lives in the system tray; closing the window hides the app instead of quitting it
+- Turn on **Start with Windows** in Settings and Claudy is there when you sign in — straight into the tray, no window in your face, shortcuts working from the moment you log in
 - Settings for shortcuts (with a recorder and conflict warnings), light/dark theme, starting with Windows, and auto-paste
 - You always get a notification telling you what happened — nothing fails silently
 

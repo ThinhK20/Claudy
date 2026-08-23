@@ -14,6 +14,7 @@ mod reminders;
 mod secrets;
 mod selection;
 mod shortcuts;
+mod startup;
 mod stt;
 mod tray;
 mod tts;
@@ -32,7 +33,13 @@ pub fn run() {
             }
         }))
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_autostart::Builder::new().build())
+        // The flag is what tells a login launch apart from a manual one: the
+        // plugin bakes these args into the entry it writes when autostart is on.
+        .plugin(
+            tauri_plugin_autostart::Builder::new()
+                .args([startup::AUTOSTART_FLAG])
+                .build(),
+        )
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
@@ -106,7 +113,19 @@ pub fn run() {
             vocabulary::export_vocabulary
         ])
         .setup(|app| {
+            use tauri::Manager;
             tray::create(app.handle())?;
+            // `main` is created hidden so a silent login start never flashes a
+            // window on screen; every other launch reveals it right here.
+            let start_minimized = config::load(app.handle())
+                .map(|s| s.start_minimized)
+                .unwrap_or(false); // an unreadable store must not hide the app
+            if startup::should_show_main(std::env::args(), start_minimized) {
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.show();
+                    let _ = w.set_focus();
+                }
+            }
             overlay::init(app.handle())?;
             shortcuts::init(app.handle());
             // Polls for due reminders; its first tick is immediate, so any
