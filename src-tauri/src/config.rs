@@ -179,6 +179,36 @@ impl Default for Settings {
     }
 }
 
+/// Serializes every load-modify-save of the settings object. `update_settings`
+/// reads the old settings, re-registers shortcuts against the difference, then
+/// writes the whole object back; two overlapping writers would each act on a
+/// stale "old" and the later save would silently undo the earlier one.
+static STORE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Take the settings write lock. A poisoned lock is recovered: one panicked
+/// update must not block every later settings change for the session.
+pub fn lock_store() -> std::sync::MutexGuard<'static, ()> {
+    STORE_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Read a stored JSON array one row at a time.
+///
+/// A row that no longer deserializes — a hand edit, a field written by a
+/// different build — costs that one row, never the whole list. Shared by the
+/// prompt and reminder stores; `usage::parse_rows` applies the same rule.
+///
+/// `Err` is reserved for a top-level shape that isn't an array. Callers must
+/// read it as "leave the file alone" — never as "start from empty".
+pub fn parse_rows<T: serde::de::DeserializeOwned>(
+    value: serde_json::Value,
+) -> Result<Vec<T>, String> {
+    let rows: Vec<serde_json::Value> = serde_json::from_value(value).map_err(|e| e.to_string())?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|row| serde_json::from_value(row).ok())
+        .collect())
+}
+
 pub fn load(app: &AppHandle) -> Result<Settings, String> {
     let store = app.store(STORE_FILE).map_err(|e| e.to_string())?;
     match store.get("settings") {
@@ -209,6 +239,9 @@ pub fn update_settings(app: AppHandle, settings: Settings) -> Result<(), String>
         ));
     }
     crate::vocabulary::validate(&settings.vocabulary)?;
+    // Held from the read of `old` to the save, and dropped before the
+    // follow-up work below, none of which writes settings.
+    let guard = lock_store();
     let old = load(&app)?;
     let dictation_changed = old.dictation_shortcut != settings.dictation_shortcut;
     let assistant_changed = old.assistant.shortcut != settings.assistant.shortcut;
@@ -233,6 +266,7 @@ pub fn update_settings(app: AppHandle, settings: Settings) -> Result<(), String>
     let wake_changed = old.assistant.wake_word != settings.assistant.wake_word;
 
     save(&app, &settings)?;
+    drop(guard);
 
     // A changed reserved combo can free/claim a prompt binding, so reconcile.
     if dictation_changed || assistant_changed {

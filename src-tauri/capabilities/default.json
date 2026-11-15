@@ -1,23 +1,9 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capabilities for main, overlay, and assistant windows",
+  "description": "Baseline for every window: core IPC and events only. Anything a single window needs on top lives in that window's own capability file.",
   "windows": ["main", "overlay", "assistant"],
   "permissions": [
-    "core:default",
-    "core:window:allow-start-dragging",
-    "core:window:allow-start-resize-dragging",
-    "store:default",
-    "notification:default",
-    "global-shortcut:allow-register",
-    "global-shortcut:allow-unregister",
-    "global-shortcut:allow-is-registered",
-    "clipboard-manager:allow-read-text",
-    "clipboard-manager:allow-write-text",
-    "autostart:allow-enable",
-    "autostart:allow-disable",
-    "autostart:allow-is-enabled",
-    "dialog:default",
-    "opener:default"
+    "core:default"
   ]
 }

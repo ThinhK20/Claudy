@@ -1,5 +1,6 @@
 {
   "identifier": "desktop-capability",
+  "description": "Main window only: file pickers for prompt/vocabulary import and export, and the Start with Windows toggle.",
   "platforms": [
     "macOS",
     "windows",
@@ -9,7 +10,10 @@
     "main"
   ],
   "permissions": [
-    "global-shortcut:default",
-    "autostart:default"
+    "dialog:allow-open",
+    "dialog:allow-save",
+    "autostart:allow-enable",
+    "autostart:allow-disable",
+    "autostart:allow-is-enabled"
   ]
 }

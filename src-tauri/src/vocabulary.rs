@@ -333,6 +333,8 @@ fn new_id() -> String {
 pub fn import_vocabulary(app: AppHandle, path: String) -> Result<ImportReport, String> {
     let raw = std::fs::read_to_string(&path).map_err(|e| format!("Could not read {path}: {e}"))?;
     let incoming = parse_import(&raw)?;
+    // The other settings writer besides `update_settings`; same lock.
+    let _guard = crate::config::lock_store();
     let mut settings = crate::config::load(&app)?;
     let (rules, report) = merge(&settings.vocabulary.rules, incoming);
     settings.vocabulary.rules = rules;

@@ -41,10 +41,21 @@ pub fn default_prompts() -> Vec<Prompt> {
     }]
 }
 
+/// Serializes every load-modify-save of the prompt list. The list is written
+/// back wholesale, so two overlapping mutations would otherwise lose one.
+static STORE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// A poisoned lock means another thread panicked mid-write; recover the guard
+/// rather than failing every later prompt edit for the rest of the session.
+fn lock_store() -> std::sync::MutexGuard<'static, ()> {
+    STORE_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 pub fn load(app: &AppHandle) -> Result<Vec<Prompt>, String> {
     let store = app.store(STORE_FILE).map_err(|e| e.to_string())?;
     match store.get(KEY) {
-        Some(v) => serde_json::from_value(v).map_err(|e| e.to_string()),
+        // Row by row: one malformed prompt costs that prompt, not the list.
+        Some(v) => crate::config::parse_rows(v),
         None => {
             let seeded = default_prompts();
             save_list(app, &seeded)?;
@@ -134,12 +145,36 @@ pub struct TemplateVars {
 
 /// Fixed placeholder set (spec line 48). Unknown {{tokens}} pass through
 /// verbatim — a template typo stays visible instead of vanishing silently.
+///
+/// Single pass over the TEMPLATE only: a substituted value is never scanned
+/// again. Chained `.replace` calls did rescan it, so selected text that merely
+/// contained the literal "{{clipboard}}" had the user's clipboard spliced in
+/// and sent to the provider.
 pub fn render(template: &str, v: &TemplateVars) -> String {
-    template
-        .replace("{{selected_text}}", &v.selected_text)
-        .replace("{{clipboard}}", &v.clipboard)
-        .replace("{{date}}", &v.date)
-        .replace("{{time}}", &v.time)
+    let known: [(&str, &str); 4] = [
+        ("{{selected_text}}", &v.selected_text),
+        ("{{clipboard}}", &v.clipboard),
+        ("{{date}}", &v.date),
+        ("{{time}}", &v.time),
+    ];
+    let mut out = String::with_capacity(template.len());
+    let mut rest = template;
+    while let Some(start) = rest.find("{{") {
+        out.push_str(&rest[..start]);
+        let tail = &rest[start..];
+        match known.iter().find(|(token, _)| tail.starts_with(token)) {
+            Some((token, value)) => {
+                out.push_str(value);
+                rest = &tail[token.len()..];
+            }
+            None => {
+                out.push_str("{{");
+                rest = &tail[2..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Templates without {{selected_text}} skip the selection probe entirely.
@@ -177,16 +212,22 @@ pub fn save_prompt(app: AppHandle, mut prompt: Prompt) -> Result<Prompt, String>
     if prompt.id.is_empty() {
         prompt.id = uuid::Uuid::new_v4().to_string();
     }
-    let list = upsert(load(&app)?, prompt.clone());
-    save_list(&app, &list)?;
+    {
+        let _guard = lock_store();
+        let list = upsert(load(&app)?, prompt.clone());
+        save_list(&app, &list)?;
+    }
     crate::shortcuts::notify_sync_warnings(&app, &crate::shortcuts::sync_prompts(&app)?);
     Ok(prompt)
 }
 
 #[tauri::command]
 pub fn delete_prompt(app: AppHandle, id: String) -> Result<(), String> {
-    let list = remove(load(&app)?, &id);
-    save_list(&app, &list)?;
+    {
+        let _guard = lock_store();
+        let list = remove(load(&app)?, &id);
+        save_list(&app, &list)?;
+    }
     crate::shortcuts::notify_sync_warnings(&app, &crate::shortcuts::sync_prompts(&app)?);
     Ok(())
 }
@@ -206,8 +247,12 @@ pub fn import_prompts(app: AppHandle, path: String) -> Result<ImportReport, Stri
     let raw = std::fs::read_to_string(&path).map_err(|e| format!("Could not read {path}: {e}"))?;
     let imported: Vec<Prompt> =
         serde_json::from_str(&raw).map_err(|e| format!("Not a valid prompts export: {e}"))?;
-    let (list, report) = merge_imported(load(&app)?, imported);
-    save_list(&app, &list)?;
+    let report = {
+        let _guard = lock_store();
+        let (list, report) = merge_imported(load(&app)?, imported);
+        save_list(&app, &list)?;
+        report
+    };
     // Imported shortcuts must take effect (or warn) immediately, like save_prompt.
     crate::shortcuts::notify_sync_warnings(&app, &crate::shortcuts::sync_prompts(&app)?);
     Ok(report)
@@ -223,6 +268,45 @@ mod tests {
 
     fn importable(id: &str, name: &str) -> Prompt {
         Prompt { id: id.into(), name: name.into(), template: "T".into(), ..Prompt::default() }
+    }
+
+    #[test]
+    fn render_never_expands_a_placeholder_that_arrived_inside_a_value() {
+        // Selected text is untrusted: a page that merely CONTAINS the literal
+        // "{{clipboard}}" must not get the user's clipboard sent to a provider.
+        let vars = TemplateVars {
+            selected_text: "see {{clipboard}} at {{time}}".into(),
+            clipboard: "SECRET {{date}}".into(),
+            date: "2026-01-02".into(),
+            time: "09:00".into(),
+        };
+        assert_eq!(
+            render("A: {{selected_text}} | B: {{clipboard}} | {{date}}", &vars),
+            "A: see {{clipboard}} at {{time}} | B: SECRET {{date}} | 2026-01-02"
+        );
+    }
+
+    #[test]
+    fn row_parsing_keeps_the_good_rows_when_one_is_malformed() {
+        // prompts.json is hand-editable; one bad row must cost that row, not
+        // every prompt and every prompt shortcut.
+        let value = serde_json::json!([
+            { "id": "a", "name": "A", "template": "T" },
+            { "id": "b", "name": 42 },
+            "not even an object",
+            { "id": "c", "name": "C", "template": "T" },
+        ]);
+        let rows: Vec<Prompt> = crate::config::parse_rows(value).unwrap();
+        let ids: Vec<&str> = rows.iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(ids, ["a", "c"]);
+    }
+
+    #[test]
+    fn row_parsing_still_rejects_a_container_that_is_not_a_list() {
+        // "Leave the file alone", never "start from empty" — the next save
+        // would otherwise replace the whole store with one row.
+        let bad = serde_json::json!({ "oops": true });
+        assert!(crate::config::parse_rows::<Prompt>(bad).is_err());
     }
 
     #[test]

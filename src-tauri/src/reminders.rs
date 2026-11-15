@@ -85,11 +85,25 @@ impl Default for Reminder {
 
 // --- persistence (same thin-wrapper shape as prompts.rs) ---
 
+/// Serializes every load-modify-save of the queue. The scheduler and the
+/// commands run on different threads and each writes the list back wholesale,
+/// so without this a reminder saved between the scheduler's read and its write
+/// would be silently reverted. Never held across an `.await` or a toast.
+static STORE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// A poisoned lock means another thread panicked mid-write; recover the guard
+/// rather than stopping every reminder for the rest of the session.
+fn lock_store() -> std::sync::MutexGuard<'static, ()> {
+    STORE_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 pub fn load(app: &AppHandle) -> Result<Vec<Reminder>, String> {
     let store = app.store(STORE_FILE).map_err(|e| e.to_string())?;
     match store.get(KEY) {
         // An empty queue is the correct first-run state — nothing to seed.
-        Some(v) => serde_json::from_value(v).map_err(|e| e.to_string()),
+        // Row by row: one malformed reminder costs that reminder. Failing the
+        // whole load instead stopped EVERY reminder from firing.
+        Some(v) => crate::config::parse_rows(v),
         None => Ok(Vec::new()),
     }
 }
@@ -715,6 +729,8 @@ pub fn start_scheduler(app: AppHandle) {
 
 fn fire_due(app: &AppHandle) {
     let now = Local::now();
+    // Covers the read through the save below; released before any toast.
+    let guard = lock_store();
     let list = match load(app) {
         Ok(l) => l,
         Err(e) => {
@@ -742,6 +758,7 @@ fn fire_due(app: &AppHandle) {
     if let Err(e) = save_list(app, &updated) {
         eprintln!("reminders: could not persist fired state: {e}");
     }
+    drop(guard);
     let enabled = config::load(app)
         .map(|s| s.notifications_enabled)
         .unwrap_or(true);
@@ -799,8 +816,12 @@ pub async fn create_reminder_from_text(app: AppHandle, text: String) -> Result<R
         fired_at: String::new(),
         status: Status::Pending,
     };
-    let list = upsert(load(&app)?, reminder.clone());
-    save_list(&app, &list)?;
+    {
+        // Taken only now — the AI fallback above is awaited without it.
+        let _guard = lock_store();
+        let list = upsert(load(&app)?, reminder.clone());
+        save_list(&app, &list)?;
+    }
     crate::usage::record(&app, crate::usage::UsageEvent::now(crate::usage::Source::ReminderCreated));
 
     let enabled = config::load(&app)
@@ -842,8 +863,11 @@ pub fn save_reminder(app: AppHandle, mut reminder: Reminder) -> Result<Reminder,
     // Normalize so ordering and comparisons never depend on input formatting.
     reminder.due_at = due.to_rfc3339();
 
-    let list = upsert(load(&app)?, reminder.clone());
-    save_list(&app, &list)?;
+    {
+        let _guard = lock_store();
+        let list = upsert(load(&app)?, reminder.clone());
+        save_list(&app, &list)?;
+    }
     if is_new {
         crate::usage::record(
             &app,
@@ -856,8 +880,11 @@ pub fn save_reminder(app: AppHandle, mut reminder: Reminder) -> Result<Reminder,
 
 #[tauri::command]
 pub fn delete_reminder(app: AppHandle, id: String) -> Result<(), String> {
-    let list = remove(load(&app)?, &id);
-    save_list(&app, &list)?;
+    {
+        let _guard = lock_store();
+        let list = remove(load(&app)?, &id);
+        save_list(&app, &list)?;
+    }
     let _ = app.emit(CHANGED_EVENT, ());
     Ok(())
 }
@@ -869,6 +896,7 @@ pub fn snooze_reminder(app: AppHandle, id: String, minutes: i64) -> Result<Remin
     if minutes < 1 {
         return Err("Snooze must be at least a minute".into());
     }
+    let _guard = lock_store();
     let list = load(&app)?;
     let mut reminder = list
         .iter()
@@ -891,6 +919,7 @@ pub fn snooze_reminder(app: AppHandle, id: String, minutes: i64) -> Result<Remin
 
 #[tauri::command]
 pub fn complete_reminder(app: AppHandle, id: String) -> Result<(), String> {
+    let _guard = lock_store();
     let mut list = load(&app)?;
     let target = list
         .iter_mut()
@@ -1232,6 +1261,21 @@ mod tests {
         let out = remove(list, "a");
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].id, "b");
+    }
+
+    #[test]
+    fn one_malformed_row_does_not_take_the_whole_queue_down() {
+        // A single bad row used to fail `load`, and the scheduler then fired
+        // nothing at all — silently, for every reminder in the file.
+        let value = serde_json::json!([
+            { "id": "a", "text": "call mum", "dueAt": "2026-07-24T16:32:00+07:00" },
+            { "id": "b", "text": ["not", "a", "string"] },
+            { "id": "c", "text": "ship it", "dueAt": "2026-07-25T09:00:00+07:00" },
+        ]);
+        let rows: Vec<Reminder> = crate::config::parse_rows(value).unwrap();
+        let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(ids, ["a", "c"]);
+        assert_eq!(due_now(&rows, now()).len(), 0, "both survivors are still pending");
     }
 
     #[test]

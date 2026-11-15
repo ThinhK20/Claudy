@@ -8,19 +8,20 @@ pub struct ModelSpec {
     pub id: &'static str,
     pub label: &'static str,
     pub disk_size: &'static str,
-    pub sha1: &'static str,
+    pub sha256: &'static str,
 }
 
-/// SHA-1 hashes from https://github.com/ggml-org/whisper.cpp/blob/master/models/README.md
+/// SHA-256 hashes are the Git LFS object ids Hugging Face publishes for each
+/// file (https://huggingface.co/api/models/ggerganov/whisper.cpp/tree/main).
 pub const CATALOG: &[ModelSpec] = &[
-    ModelSpec { id: "tiny",           label: "Tiny (multilingual)",  disk_size: "75 MiB",  sha1: "bd577a113a864445d4c299885e0cb97d4ba92b5f" },
-    ModelSpec { id: "tiny.en",        label: "Tiny (English)",       disk_size: "75 MiB",  sha1: "c78c86eb1a8faa21b369bcd33207cc90d64ae9df" },
-    ModelSpec { id: "base",           label: "Base (multilingual)",  disk_size: "142 MiB", sha1: "465707469ff3a37a2b9b8d8f89f2f99de7299dac" },
-    ModelSpec { id: "base.en",        label: "Base (English)",       disk_size: "142 MiB", sha1: "137c40403d78fd54d454da0f9bd998f78703390c" },
-    ModelSpec { id: "small",          label: "Small (multilingual)", disk_size: "466 MiB", sha1: "55356645c2b361a969dfd0ef2c5a50d530afd8d5" },
-    ModelSpec { id: "small.en",       label: "Small (English)",      disk_size: "466 MiB", sha1: "db8a495a91d927739e50b3fc1cc4c6b8f6c2d022" },
-    ModelSpec { id: "medium",         label: "Medium (multilingual)",disk_size: "1.5 GiB", sha1: "fd9727b6e1217c2f614f9b698455c4ffd82463b4" },
-    ModelSpec { id: "large-v3-turbo", label: "Large v3 Turbo",       disk_size: "1.5 GiB", sha1: "4af2b29d7ec73d781377bfd1758ca957a807e941" },
+    ModelSpec { id: "tiny",           label: "Tiny (multilingual)",  disk_size: "75 MiB",  sha256: "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21" },
+    ModelSpec { id: "tiny.en",        label: "Tiny (English)",       disk_size: "75 MiB",  sha256: "921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f" },
+    ModelSpec { id: "base",           label: "Base (multilingual)",  disk_size: "142 MiB", sha256: "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe" },
+    ModelSpec { id: "base.en",        label: "Base (English)",       disk_size: "142 MiB", sha256: "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002" },
+    ModelSpec { id: "small",          label: "Small (multilingual)", disk_size: "466 MiB", sha256: "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b" },
+    ModelSpec { id: "small.en",       label: "Small (English)",      disk_size: "466 MiB", sha256: "c6138d6d58ecc8322097e0f987c32f1be8bb0a18532a3f88f734d1bbf9c41e5d" },
+    ModelSpec { id: "medium",         label: "Medium (multilingual)",disk_size: "1.5 GiB", sha256: "6c14d5adee5f86394037b4e4e8b59f1673b6cee10e3cf0b11bbdbee79c156208" },
+    ModelSpec { id: "large-v3-turbo", label: "Large v3 Turbo",       disk_size: "1.5 GiB", sha256: "1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69" },
 ];
 
 pub fn catalog_get(id: &str) -> Option<&'static ModelSpec> {
@@ -110,12 +111,12 @@ mod tests {
     use std::collections::HashSet;
 
     #[test]
-    fn catalog_ids_are_unique_and_hashes_are_sha1_hex() {
+    fn catalog_ids_are_unique_and_hashes_are_sha256_hex() {
         let mut seen = HashSet::new();
         for m in CATALOG {
             assert!(seen.insert(m.id), "duplicate id {}", m.id);
-            assert_eq!(m.sha1.len(), 40, "{} sha1 length", m.id);
-            assert!(m.sha1.chars().all(|c| c.is_ascii_hexdigit()));
+            assert_eq!(m.sha256.len(), 64, "{} sha256 length", m.id);
+            assert!(m.sha256.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
         }
     }
 

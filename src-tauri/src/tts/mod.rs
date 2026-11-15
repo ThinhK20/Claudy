@@ -21,14 +21,14 @@ pub struct TtsAudio {
     pub sample_rate: u32,
 }
 
-/// A downloadable Kokoro asset. `sha1` is optional — the release assets aren't
-/// published with pinned hashes, so integrity relies on the model loader
-/// rejecting a corrupt file (which degrades to text, never a crash).
+/// A downloadable Kokoro asset. `sha256` is mandatory: the release assets are
+/// mutable by the upstream repo owner, so each is pinned to the hash of the
+/// file this build was verified against (computed from the V1.0 release).
 pub struct TtsAssetSpec {
     pub id: &'static str,
     pub filename: &'static str,
     pub url: &'static str,
-    pub sha1: Option<&'static str>,
+    pub sha256: &'static str,
     pub label: &'static str,
     pub size: &'static str,
 }
@@ -42,7 +42,7 @@ pub const KOKORO_ASSETS: &[TtsAssetSpec] = &[
         id: "kokoro-model",
         filename: "kokoro-v1.0.int8-r2.onnx",
         url: "https://github.com/mzdk100/kokoro/releases/download/V1.0/kokoro-v1.0.int8.onnx",
-        sha1: None,
+        sha256: "6e742170d309016e5891a994e1ce1559c702a2ccd0075e67ef7157974f6406cb",
         label: "Kokoro model (int8)",
         size: "88 MB",
     },
@@ -50,7 +50,7 @@ pub const KOKORO_ASSETS: &[TtsAssetSpec] = &[
         id: "kokoro-voices",
         filename: "voices-v1.0-r2.bin",
         url: "https://github.com/mzdk100/kokoro/releases/download/V1.0/voices.bin",
-        sha1: None,
+        sha256: "988549ccf1d68a80a31de1b9d00ac59d5dceb69743cbc607d1de17c7c4cdccf4",
         label: "Kokoro voices",
         size: "27 MB",
     },
