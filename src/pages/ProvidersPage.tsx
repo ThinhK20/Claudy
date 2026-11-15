@@ -11,16 +11,25 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { ConfirmDialog } from "@/components/confirm-dialog";
+import { InlineStatus } from "@/components/inline-status";
+import { Page, SettingsUnavailable } from "@/components/page";
+import { SaveStatus } from "@/components/save-status";
 import { ToggleRow } from "@/components/toggle-row";
 import { hasApiKey, setApiKey, testProvider } from "@/lib/ai-api";
+import { errorMessage } from "@/lib/error-message";
 import { formatModelList, parseModelList } from "@/lib/model-list";
 import {
   useSettings,
   type AiSettings,
   type ProviderId,
   type ProviderSettings,
-  type Settings,
 } from "@/lib/settings-store";
+import { useSafeUpdate } from "@/lib/use-safe-update";
+
+const TITLE = "Providers";
+const DESCRIPTION =
+  "The AI service behind prompt shortcuts, the assistant and reminders. Configure any provider; only the active one is used.";
 
 /** The `AiSettings` keys that hold a provider block, as opposed to the
     scalar switches sitting beside them. Derived rather than hand-listed so a
@@ -86,17 +95,21 @@ interface TestState {
   message: string;
 }
 
+interface KeyStatus {
+  tone: "error" | "success";
+  text: string;
+}
+
 export default function ProvidersPage() {
   const settings = useSettings((s) => s.settings);
-  const update = useSettings((s) => s.update);
-  const load = useSettings((s) => s.load);
+  const { safeUpdate, feedback } = useSafeUpdate();
   // null = "show the active provider's tab" (until the user picks one).
   const [selected, setSelected] = useState<ProviderId | null>(null);
   const [isKeyStored, setIsKeyStored] = useState(false);
   const [keyDraft, setKeyDraft] = useState("");
-  const [keyError, setKeyError] = useState<string | null>(null);
+  const [keyStatus, setKeyStatus] = useState<KeyStatus | null>(null);
+  const [confirmRemove, setConfirmRemove] = useState(false);
   const [test, setTest] = useState<TestState>({ status: "idle", message: "" });
-  const [error, setError] = useState<string | null>(null);
 
   const activeId = settings?.ai.activeProvider ?? "openai_compatible";
   const selectedId = selected ?? activeId;
@@ -105,38 +118,27 @@ export default function ProvidersPage() {
   useEffect(() => {
     let stale = false;
     setKeyDraft("");
-    setKeyError(null);
+    setKeyStatus(null);
     setTest({ status: "idle", message: "" });
     hasApiKey(meta.id)
       .then((stored) => {
         if (!stale) setIsKeyStored(stored);
       })
       .catch((e: unknown) => {
-        if (!stale) setKeyError(String(e));
+        if (!stale)
+          setKeyStatus({
+            tone: "error",
+            text: `Couldn't check for a stored key: ${errorMessage(e)}`,
+          });
       });
     return () => {
       stale = true;
     };
   }, [meta.id]);
 
-  if (!settings) return null;
+  if (!settings) return <SettingsUnavailable title={TITLE} description={DESCRIPTION} />;
   const cfg = settings.ai[meta.settingsKey];
   const isActive = meta.id === activeId;
-
-  // update() is optimistic; on rejection re-load so the UI shows reality.
-  const safeUpdate = async (patch: Partial<Settings>) => {
-    setError(null);
-    try {
-      await update(patch);
-    } catch (e: unknown) {
-      setError(String(e));
-      try {
-        await load();
-      } catch (reloadError: unknown) {
-        setError(`${String(e)} (could not refresh settings: ${String(reloadError)})`);
-      }
-    }
-  };
 
   const patchProvider = (
     patch: Partial<{ baseUrl: string; model: string; fallbackModels: string[] }>,
@@ -145,14 +147,19 @@ export default function ProvidersPage() {
   const setActive = () =>
     void safeUpdate({ ai: { ...settings.ai, activeProvider: meta.id } });
 
-  const saveKey = async () => {
-    setKeyError(null);
+  // An empty key removes the stored one, so Save and Remove share a command.
+  const writeKey = async (key: string) => {
+    setKeyStatus(null);
     try {
-      await setApiKey(meta.id, keyDraft); // empty draft = remove the key
+      await setApiKey(meta.id, key);
       setKeyDraft("");
       setIsKeyStored(await hasApiKey(meta.id));
+      setKeyStatus({ tone: "success", text: key ? "Key saved." : "Key removed." });
     } catch (e: unknown) {
-      setKeyError(String(e));
+      setKeyStatus({
+        tone: "error",
+        text: `Couldn't ${key ? "save" : "remove"} the key: ${errorMessage(e)}`,
+      });
     }
   };
 
@@ -162,22 +169,12 @@ export default function ProvidersPage() {
       const reply = await testProvider(meta.id);
       setTest({ status: "ok", message: reply });
     } catch (e: unknown) {
-      setTest({ status: "error", message: String(e) });
+      setTest({ status: "error", message: errorMessage(e) });
     }
   };
 
   return (
-    <div className="flex flex-col gap-6 p-6">
-      <div>
-        <h1 className="text-2xl font-semibold">Providers</h1>
-        <p className="text-muted-foreground mt-1">
-          AI provider for prompt shortcuts. Configure any provider; only the active one
-          is used.
-        </p>
-      </div>
-
-      {error && <p className="text-destructive text-sm">{error}</p>}
-
+    <Page title={TITLE} description={DESCRIPTION}>
       <Tabs value={meta.id} onValueChange={(v) => setSelected(v as ProviderId)}>
         <TabsList>
           {PROVIDERS.map((p) => (
@@ -195,7 +192,7 @@ export default function ProvidersPage() {
             <div>
               <CardTitle>{meta.label}</CardTitle>
               <CardDescription>
-                Empty fields use the defaults shown as placeholders.
+                Empty fields use the defaults shown in grey.
               </CardDescription>
             </div>
             {isActive ? (
@@ -211,8 +208,11 @@ export default function ProvidersPage() {
           {/* key remounts on provider switch so defaultValue re-seeds; commit
               on blur — per-keystroke updates would write settings.json each key */}
           <div className="flex items-center gap-3">
-            <Label className="w-28 shrink-0">Base URL</Label>
+            <Label className="w-28 shrink-0" htmlFor="provider-base-url">
+              Base URL
+            </Label>
             <Input
+              id="provider-base-url"
               key={`${meta.id}-baseUrl`}
               defaultValue={cfg.baseUrl}
               placeholder={meta.defaultBaseUrl}
@@ -220,8 +220,11 @@ export default function ProvidersPage() {
             />
           </div>
           <div className="flex items-center gap-3">
-            <Label className="w-28 shrink-0">Model</Label>
+            <Label className="w-28 shrink-0" htmlFor="provider-model">
+              Model
+            </Label>
             <Input
+              id="provider-model"
               key={`${meta.id}-model`}
               defaultValue={cfg.model}
               placeholder={meta.defaultModel}
@@ -229,8 +232,11 @@ export default function ProvidersPage() {
             />
           </div>
           <div className="flex items-center gap-3">
-            <Label className="w-28 shrink-0">Fallback models</Label>
+            <Label className="w-28 shrink-0" htmlFor="provider-fallbacks">
+              Fallback models
+            </Label>
             <Input
+              id="provider-fallbacks"
               key={`${meta.id}-fallbackModels`}
               defaultValue={formatModelList(cfg.fallbackModels)}
               placeholder={
@@ -243,7 +249,10 @@ export default function ProvidersPage() {
           </div>
           <p className="text-muted-foreground text-sm">
             Comma-separated, tried in order when {meta.label} reports the model is
-            overloaded. Leave empty to use the placeholder.
+            overloaded.{" "}
+            {meta.defaultFallbacks.length > 0
+              ? "Leave empty to use the built-in list shown in the field."
+              : "Leave empty for no fallback."}
           </p>
         </CardContent>
       </Card>
@@ -272,28 +281,32 @@ export default function ProvidersPage() {
         <CardHeader>
           <CardTitle>API key</CardTitle>
           <CardDescription>
-            Stored in the OS credential store, never in a file. {meta.keyHint}.
+            Stored in the Windows credential store, never in a file. {meta.keyHint}.
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
           <div className="flex items-center gap-3">
             <Input
               type="password"
+              aria-label={`${meta.label} API key`}
               value={keyDraft}
               placeholder={isKeyStored ? "•••••••• (stored)" : "Paste API key"}
               onChange={(e) => setKeyDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && keyDraft) void writeKey(keyDraft);
+              }}
             />
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => void saveKey()}
-              disabled={!keyDraft && !isKeyStored}
-            >
-              {keyDraft || !isKeyStored ? "Save key" : "Remove key"}
+            <Button size="sm" onClick={() => void writeKey(keyDraft)} disabled={!keyDraft}>
+              {isKeyStored ? "Replace key" : "Save key"}
             </Button>
+            {isKeyStored && (
+              <Button variant="outline" size="sm" onClick={() => setConfirmRemove(true)}>
+                Remove
+              </Button>
+            )}
             {isKeyStored && <Badge variant="secondary">Key stored</Badge>}
           </div>
-          {keyError && <p className="text-destructive text-sm">{keyError}</p>}
+          {keyStatus && <InlineStatus tone={keyStatus.tone}>{keyStatus.text}</InlineStatus>}
         </CardContent>
       </Card>
 
@@ -301,7 +314,7 @@ export default function ProvidersPage() {
         <CardHeader>
           <CardTitle>Connection test</CardTitle>
           <CardDescription>
-            Sends a one-word prompt through the full pipeline for {meta.label}
+            Sends a one-word prompt through the full pipeline for {meta.label}.
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
@@ -311,13 +324,22 @@ export default function ProvidersPage() {
             </Button>
           </div>
           {test.status === "ok" && (
-            <p className="text-sm text-green-600">Reply: {test.message}</p>
+            <InlineStatus tone="success">Connected. Reply: {test.message}</InlineStatus>
           )}
-          {test.status === "error" && (
-            <p className="text-destructive text-sm">{test.message}</p>
-          )}
+          {test.status === "error" && <InlineStatus>{test.message}</InlineStatus>}
         </CardContent>
       </Card>
-    </div>
+
+      <ConfirmDialog
+        open={confirmRemove}
+        onOpenChange={setConfirmRemove}
+        title={`Remove the ${meta.label} API key?`}
+        description="The key is deleted from the Windows credential store. Requests to this provider fail until you add a key again."
+        confirmLabel="Remove key"
+        onConfirm={() => void writeKey("")}
+      />
+
+      <SaveStatus feedback={feedback} />
+    </Page>
   );
 }

@@ -8,8 +8,9 @@ interface LevelBarsProps {
 }
 
 /// A small five-bar microphone level meter driven by the `mic-level` event.
-/// Inactive bars use `currentColor` so it reads correctly on both the dark
-/// dictation overlay and the themed assistant popup.
+/// Active bars use the --success token; inactive ones use `currentColor`, so it
+/// reads correctly on both the dark dictation overlay (which forces the dark
+/// tokens) and the themed assistant window.
 export function LevelBars({ level, className }: LevelBarsProps) {
   // RMS levels for speech are small; scale up so normal speech lights bars.
   const active = Math.min(LEVEL_BARS, Math.round(level * LEVEL_BARS * 4));
@@ -20,7 +21,7 @@ export function LevelBars({ level, className }: LevelBarsProps) {
           key={i}
           className={cn(
             "w-1 rounded-sm",
-            i < active ? "bg-green-400" : "bg-current opacity-25",
+            i < active ? "bg-success" : "bg-current opacity-25",
           )}
           style={{ height: `${6 + i * 2}px` }}
         />

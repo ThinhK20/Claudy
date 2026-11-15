@@ -1,4 +1,3 @@
-import { useState } from "react";
 import {
   Card,
   CardContent,
@@ -15,16 +14,19 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
+import { Page, SettingsUnavailable } from "@/components/page";
+import { SaveStatus } from "@/components/save-status";
 import { ShortcutInput } from "@/components/shortcut-input";
 import { ToggleRow } from "@/components/toggle-row";
 import { SystemPromptEditor } from "@/components/assistant/system-prompt-editor";
 import { VoiceModelManager } from "@/components/assistant/voice-model-manager";
 import { WakeWordCard } from "@/components/assistant/wake-word-settings";
-import {
-  useSettings,
-  type Settings,
-  type WakeWordSettings,
-} from "@/lib/settings-store";
+import { useSettings, type WakeWordSettings } from "@/lib/settings-store";
+import { useSafeUpdate } from "@/lib/use-safe-update";
+
+const TITLE = "Assistant";
+const DESCRIPTION =
+  "An ask box opened by a global shortcut or your voice, with an optional spoken answer.";
 
 const AUTO_CLOSE_OPTIONS: { value: number; label: string }[] = [
   { value: 0, label: "Never" },
@@ -52,48 +54,22 @@ const SPEED_OPTIONS: number[] = [0.75, 1.0, 1.25, 1.5, 1.75, 2.0];
 
 export default function AssistantSettingsPage() {
   const settings = useSettings((s) => s.settings);
-  const update = useSettings((s) => s.update);
-  const load = useSettings((s) => s.load);
-  const [error, setError] = useState<string | null>(null);
+  const { safeUpdate, feedback } = useSafeUpdate();
 
-  if (!settings) return null;
-
-  // update() is optimistic; on rejection re-load so the UI shows reality.
-  const safeUpdate = async (patch: Partial<Settings>) => {
-    setError(null);
-    try {
-      await update(patch);
-    } catch (e: unknown) {
-      setError(String(e));
-      try {
-        await load();
-      } catch (reloadError: unknown) {
-        setError(`${String(e)} (could not refresh settings: ${String(reloadError)})`);
-      }
-    }
-  };
+  if (!settings) return <SettingsUnavailable title={TITLE} description={DESCRIPTION} />;
 
   return (
-    <div className="flex flex-col gap-6 p-6">
-      <div>
-        <h1 className="text-2xl font-semibold">Assistant</h1>
-        <p className="text-muted-foreground mt-1">
-          Quick-ask AI popup opened by a global shortcut, with an optional spoken answer.
-        </p>
-      </div>
-
-      {error && <p className="text-destructive text-sm">{error}</p>}
-
+    <Page title={TITLE} description={DESCRIPTION}>
       <Card>
         <CardHeader>
           <CardTitle>Behavior</CardTitle>
-          <CardDescription>How the ask popup opens, answers, and closes.</CardDescription>
+          <CardDescription>How the ask box opens and how the answer panel closes.</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-5">
           <div>
             <Label>Shortcut</Label>
             <p className="text-muted-foreground mb-2 text-sm">
-              Global combination that opens the ask popup at your cursor.
+              The global key combination that opens the ask box at your cursor.
             </p>
             <ShortcutInput
               value={settings.assistant.shortcut}
@@ -121,7 +97,7 @@ export default function AssistantSettingsPage() {
             <div>
               <Label>Auto-close answer</Label>
               <p className="text-muted-foreground text-sm">
-                Hide the answer panel after this long. Hovering or interacting pauses it.
+                Hide the answer panel after this long. A bar shows the time left; hovering, scrolling or using the keyboard in the panel pauses it.
               </p>
             </div>
             <Select
@@ -132,7 +108,7 @@ export default function AssistantSettingsPage() {
                 })
               }
             >
-              <SelectTrigger className="w-36">
+              <SelectTrigger className="w-36" aria-label="Auto-close answer">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -186,7 +162,7 @@ export default function AssistantSettingsPage() {
                 void safeUpdate({ assistant: { ...settings.assistant, ttsVoice: v } })
               }
             >
-              <SelectTrigger className="w-44">
+              <SelectTrigger className="w-44" aria-label="Voice">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -210,7 +186,7 @@ export default function AssistantSettingsPage() {
                 void safeUpdate({ assistant: { ...settings.assistant, speechSpeed: Number(v) } })
               }
             >
-              <SelectTrigger className="w-28">
+              <SelectTrigger className="w-28" aria-label="Speech speed">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -232,6 +208,7 @@ export default function AssistantSettingsPage() {
             </div>
             <Slider
               className="w-44"
+              aria-label="Volume"
               min={0}
               max={1}
               step={0.05}
@@ -243,7 +220,7 @@ export default function AssistantSettingsPage() {
           </div>
 
           <ToggleRow
-            label="Keep panel open while speaking"
+            label="Keep the answer panel open while speaking"
             description="Pause the auto-close timer until the spoken answer finishes."
             checked={settings.assistant.keepOpenWhileSpeaking}
             onChange={(v) =>
@@ -256,6 +233,8 @@ export default function AssistantSettingsPage() {
           <VoiceModelManager />
         </CardContent>
       </Card>
-    </div>
+
+      <SaveStatus feedback={feedback} />
+    </Page>
   );
 }

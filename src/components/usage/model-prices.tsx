@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { InlineStatus } from "@/components/inline-status";
+import { errorMessage } from "@/lib/error-message";
 import { useSettings } from "@/lib/settings-store";
 import {
   listModelPrices,
@@ -28,7 +30,7 @@ export function ModelPrices({ pricesAsOf }: { pricesAsOf: string }) {
       setRows(await listModelPrices());
       setError(null);
     } catch (e: unknown) {
-      setError(String(e));
+      setError(errorMessage(e));
     }
   }, []);
 
@@ -52,7 +54,7 @@ export function ModelPrices({ pricesAsOf }: { pricesAsOf: string }) {
       await update({ usage: { ...settings.usage, modelPrices } });
       setError(null);
     } catch (e: unknown) {
-      setError(String(e));
+      setError(errorMessage(e));
     }
     // Re-read so `overridden` / `priced` reflect what actually got stored.
     await reload();
@@ -78,7 +80,7 @@ export function ModelPrices({ pricesAsOf }: { pricesAsOf: string }) {
         million tokens. Providers change them without notice — edit any row to use
         your own. Ollama always counts as free.
       </p>
-      {error && <p className="text-destructive text-sm">{error}</p>}
+      {error && <InlineStatus onDismiss={() => setError(null)}>{error}</InlineStatus>}
 
       {visible.length === 0 ? (
         <p className="text-muted-foreground text-sm">

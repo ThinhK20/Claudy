@@ -14,7 +14,10 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { ConfirmDialog } from "@/components/confirm-dialog";
+import { InlineStatus } from "@/components/inline-status";
 import { ToggleRow } from "@/components/toggle-row";
+import { errorMessage } from "@/lib/error-message";
 import { useSettings } from "@/lib/settings-store";
 import {
   exportVocabulary,
@@ -46,6 +49,7 @@ export function VocabularyManager() {
   const [preview, setPreview] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [report, setReport] = useState<string | null>(null);
+  const [toDelete, setToDelete] = useState<VocabRule | null>(null);
 
   const stored = settings?.vocabulary.rules;
 
@@ -63,7 +67,7 @@ export function VocabularyManager() {
         await update({ vocabulary: { ...settings.vocabulary, rules: next } });
         setError(null);
       } catch (e: unknown) {
-        setError(String(e));
+        setError(`Couldn't save your rules: ${errorMessage(e)}`);
       }
     },
     [settings, update],
@@ -85,7 +89,7 @@ export function VocabularyManager() {
           if (seq === previewSeq.current) setPreview(out);
         })
         .catch((e: unknown) => {
-          if (seq === previewSeq.current) setError(String(e));
+          if (seq === previewSeq.current) setError(`Preview failed: ${errorMessage(e)}`);
         });
     }, PREVIEW_DEBOUNCE_MS);
     return () => clearTimeout(timer);
@@ -112,7 +116,24 @@ export function VocabularyManager() {
   const commitRule = (id: string, patch: Partial<VocabRule>) =>
     void save(rules.map((r) => (r.id === id ? { ...r, ...patch } : r)));
 
-  const deleteRule = (id: string) => void save(rules.filter((r) => r.id !== id));
+  const removeRule = (id: string) => void save(rules.filter((r) => r.id !== id));
+
+  // A blank draft row holds nothing worth confirming; a real rule does.
+  const requestDelete = (id: string) => {
+    const rule = rules.find((r) => r.id === id);
+    if (!rule) return;
+    if (!rule.from.trim() && !rule.to.trim()) removeRule(id);
+    else setToDelete(rule);
+  };
+
+  const setEnabled = async (enabled: boolean) => {
+    setError(null);
+    try {
+      await update({ vocabulary: { ...settings.vocabulary, enabled } });
+    } catch (e: unknown) {
+      setError(`Couldn't save: ${errorMessage(e)}`);
+    }
+  };
 
   const doExport = async () => {
     setError(null);
@@ -126,7 +147,7 @@ export function VocabularyManager() {
       const count = await exportVocabulary(path);
       setReport(`Exported ${count} rule${count === 1 ? "" : "s"}.`);
     } catch (e: unknown) {
-      setError(String(e));
+      setError(`Export failed: ${errorMessage(e)}`);
     }
   };
 
@@ -145,7 +166,7 @@ export function VocabularyManager() {
           (r.skipped ? ` ${r.skipped} skipped — the list is full.` : ""),
       );
     } catch (e: unknown) {
-      setError(String(e));
+      setError(`Import failed: ${errorMessage(e)}`);
     }
   };
 
@@ -166,13 +187,11 @@ export function VocabularyManager() {
           label="Apply corrections"
           description="Turn off to see raw transcripts without deleting your rules."
           checked={settings.vocabulary.enabled}
-          onChange={(enabled) =>
-            void update({ vocabulary: { ...settings.vocabulary, enabled } })
-          }
+          onChange={(enabled) => void setEnabled(enabled)}
         />
 
-        {error && <p className="text-destructive text-sm">{error}</p>}
-        {report && <p className="text-muted-foreground text-sm">{report}</p>}
+        {error && <InlineStatus onDismiss={() => setError(null)}>{error}</InlineStatus>}
+        {report && <InlineStatus tone="success">{report}</InlineStatus>}
 
         {rules.length === 0 ? (
           <p className="text-muted-foreground text-sm">
@@ -198,7 +217,7 @@ export function VocabularyManager() {
                   rule={rule}
                   onEdit={editRule}
                   onCommit={commitRule}
-                  onDelete={deleteRule}
+                  onDelete={requestDelete}
                 />
               ))}
             </div>
@@ -252,6 +271,20 @@ export function VocabularyManager() {
           )}
         </div>
       </CardContent>
+
+      <ConfirmDialog
+        open={toDelete !== null}
+        onOpenChange={(open) => {
+          if (!open) setToDelete(null);
+        }}
+        title="Delete this rule?"
+        description={`"${toDelete?.from ?? ""}" will no longer be corrected to "${toDelete?.to ?? ""}". This can't be undone.`}
+        confirmLabel="Delete"
+        onConfirm={() => {
+          if (toDelete) removeRule(toDelete.id);
+          setToDelete(null);
+        }}
+      />
     </Card>
   );
 }

@@ -9,8 +9,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
-import { useSettings } from "@/lib/settings-store";
+import { InlineStatus } from "@/components/inline-status";
+import { ToggleRow } from "@/components/toggle-row";
+import { errorMessage } from "@/lib/error-message";
+import { useSettings, type Settings } from "@/lib/settings-store";
+import { markSetupItemDone } from "@/lib/setup-checklist";
 import { listAudioDevices, onMicLevel, startCapture, stopCapture } from "@/lib/stt-api";
 
 const DEFAULT_DEVICE = "__default__";
@@ -44,7 +47,7 @@ export function MicSettings() {
   useEffect(() => {
     listAudioDevices()
       .then(setDevices)
-      .catch((e: unknown) => setError(String(e)));
+      .catch((e: unknown) => setError(`Couldn't list microphones: ${errorMessage(e)}`));
     return () => {
       mountedRef.current = false;
       unlistenRef.current?.();
@@ -53,6 +56,15 @@ export function MicSettings() {
   }, []);
 
   if (!settings) return null;
+
+  const save = async (patch: Partial<Settings>) => {
+    setError(null);
+    try {
+      await updateSettings(patch);
+    } catch (e: unknown) {
+      setError(`Couldn't save: ${errorMessage(e)}`);
+    }
+  };
 
   const toggleTest = async () => {
     setError(null);
@@ -76,33 +88,33 @@ export function MicSettings() {
         await startCapture(settings.micDevice);
         setIsTesting(true);
         isTestingRef.current = true;
+        markSetupItemDone("mic-test");
       }
     } catch (e: unknown) {
       unlistenRef.current?.();
       unlistenRef.current = null;
       setIsTesting(false);
       isTestingRef.current = false;
-      setError(String(e));
+      setError(`Mic test failed: ${errorMessage(e)}`);
     }
   };
 
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Microphone & Language</CardTitle>
-        <CardDescription>Input device and transcription language</CardDescription>
+        <CardTitle>Microphone and language</CardTitle>
+        <CardDescription>
+          Which microphone to record from and the language you speak.
+        </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
-        {error && <p className="text-destructive text-sm">{error}</p>}
         <div className="flex items-center gap-3">
           <Label className="w-28 shrink-0">Microphone</Label>
           <Select
             value={settings.micDevice || DEFAULT_DEVICE}
-            onValueChange={(v) =>
-              updateSettings({ micDevice: v === DEFAULT_DEVICE ? "" : v })
-            }
+            onValueChange={(v) => void save({ micDevice: v === DEFAULT_DEVICE ? "" : v })}
           >
-            <SelectTrigger className="flex-1">
+            <SelectTrigger className="flex-1" aria-label="Microphone">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -114,25 +126,33 @@ export function MicSettings() {
               ))}
             </SelectContent>
           </Select>
-          <Button variant="outline" size="sm" onClick={toggleTest}>
+          <Button variant="outline" size="sm" onClick={() => void toggleTest()}>
             {isTesting ? "Stop test" : "Test mic"}
           </Button>
         </div>
         {isTesting && (
-          <div className="bg-muted h-2 w-full overflow-hidden rounded-full">
+          <div
+            role="meter"
+            aria-label="Microphone level"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={Math.round(Math.min(level * 400, 100))}
+            className="bg-muted h-2 w-full overflow-hidden rounded-full"
+          >
             <div
-              className="h-full bg-green-500 transition-[width] duration-75"
+              className="bg-success h-full transition-[width] duration-75"
               style={{ width: `${Math.min(level * 400, 100)}%` }}
             />
           </div>
         )}
+        {error && <InlineStatus onDismiss={() => setError(null)}>{error}</InlineStatus>}
         <div className="flex items-center gap-3">
           <Label className="w-28 shrink-0">Language</Label>
           <Select
             value={settings.language}
-            onValueChange={(v) => updateSettings({ language: v })}
+            onValueChange={(v) => void save({ language: v })}
           >
-            <SelectTrigger className="flex-1">
+            <SelectTrigger className="flex-1" aria-label="Language">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -144,19 +164,12 @@ export function MicSettings() {
             </SelectContent>
           </Select>
         </div>
-        <div className="flex items-center gap-3">
-          <Label className="w-28 shrink-0" htmlFor="keep-warm">
-            Keep model warm
-          </Label>
-          <Switch
-            id="keep-warm"
-            checked={settings.keepModelWarm}
-            onCheckedChange={(v) => updateSettings({ keepModelWarm: v })}
-          />
-          <span className="text-muted-foreground text-xs">
-            Faster repeat transcriptions; uses more memory
-          </span>
-        </div>
+        <ToggleRow
+          label="Keep the speech model loaded"
+          description="Dictation starts faster after the first time, but the model stays in memory between uses."
+          checked={settings.keepModelWarm}
+          onChange={(v) => void save({ keepModelWarm: v })}
+        />
       </CardContent>
     </Card>
   );

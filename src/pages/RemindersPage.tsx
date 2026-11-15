@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { AlarmClock, Check, Clock, Pencil, Plus, Trash2 } from "lucide-react";
+import { AlarmClock, BellRing, Check, ChevronDown, Clock, Pencil, Plus, Trash2 } from "lucide-react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -14,6 +14,9 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { InlineStatus } from "@/components/inline-status";
+import { Page } from "@/components/page";
 import { DateTimePicker } from "@/components/reminders/date-time-picker";
 import {
   byDueAt,
@@ -22,6 +25,7 @@ import {
   isOverdue,
   toDateTimeLocal,
 } from "@/lib/reminder-format";
+import { errorMessage } from "@/lib/error-message";
 import {
   completeReminder,
   deleteReminder,
@@ -56,7 +60,7 @@ export default function RemindersPage() {
       setReminders(await listReminders());
       setError(null);
     } catch (e: unknown) {
-      setError(String(e));
+      setError(`Couldn't load reminders: ${errorMessage(e)}`);
     }
   }, []);
 
@@ -83,7 +87,7 @@ export default function RemindersPage() {
       await op();
       await reload();
     } catch (e: unknown) {
-      setError(String(e));
+      setError(errorMessage(e));
     }
   };
 
@@ -145,14 +149,10 @@ export default function RemindersPage() {
     );
 
   return (
-    <div className="flex flex-col gap-6 p-6">
-      <div>
-        <h1 className="text-2xl font-semibold">Reminders</h1>
-        <p className="text-muted-foreground mt-1">
-          Press the assistant shortcut, then Shift+Tab, to add one by typing. Claudy
-          notifies you at the time and keeps it here until you dismiss it.
-        </p>
-      </div>
+    <Page
+      title="Reminders"
+      description="Open the ask box with the assistant shortcut and switch it to Remind (Shift+Tab) to add one by typing. Claudy notifies you at the time and keeps it here until you mark it done."
+    >
 
       <div className="flex items-center gap-3">
         <Button onClick={() => setEditing(blank())}>
@@ -161,7 +161,7 @@ export default function RemindersPage() {
         </Button>
       </div>
 
-      {error && <p className="text-destructive text-sm">{error}</p>}
+      {error && <InlineStatus onDismiss={() => setError(null)}>{error}</InlineStatus>}
 
       <ReminderEditor
         initial={editing}
@@ -197,11 +197,13 @@ export default function RemindersPage() {
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={confirmDelete}>Delete</AlertDialogAction>
+            <AlertDialogAction variant="destructive" onClick={confirmDelete}>
+              Delete
+            </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
+    </Page>
   );
 }
 
@@ -226,13 +228,14 @@ function ReminderRow({
 }: ReminderRowProps) {
   const fired = reminder.status === "fired";
   const isDone = reminder.status === "done";
+  const name = reminder.title || reminder.text;
 
   return (
     <div className="flex items-center gap-3 border-b px-4 py-3 last:border-b-0">
       {attention ? (
-        <AlarmClock className="text-destructive h-4 w-4 shrink-0" />
+        <AlarmClock className="text-destructive h-4 w-4 shrink-0" aria-hidden="true" />
       ) : (
-        <Clock className="text-muted-foreground h-4 w-4 shrink-0" />
+        <Clock className="text-muted-foreground h-4 w-4 shrink-0" aria-hidden="true" />
       )}
       <div className="min-w-0 flex-1">
         <p
@@ -240,7 +243,7 @@ function ReminderRow({
             isDone ? "text-muted-foreground line-through" : ""
           }`}
         >
-          {reminder.title || reminder.text}
+          {name}
         </p>
         <div className="text-muted-foreground flex items-center gap-2 text-sm">
           <span>{formatDue(reminder.dueAt, now)}</span>
@@ -250,31 +253,70 @@ function ReminderRow({
         </div>
       </div>
       <div className="flex shrink-0 items-center gap-1">
-        {attention &&
-          SNOOZE_OPTIONS.map((o) => (
-            <Button
-              key={o.minutes}
-              variant="ghost"
-              size="sm"
-              title={`Remind me again in ${o.label.toLowerCase()}`}
-              onClick={() => onSnooze(o.minutes)}
-            >
-              {o.label}
-            </Button>
-          ))}
+        {attention && <SnoozeMenu onSnooze={onSnooze} />}
         {!isDone && (
-          <Button variant="ghost" size="icon" title="Mark as done" onClick={onComplete}>
-            <Check className="h-4 w-4" />
+          <Button
+            variant="ghost"
+            size="icon"
+            title="Mark as done"
+            aria-label={`Mark "${name}" as done`}
+            onClick={onComplete}
+          >
+            <Check className="h-4 w-4" aria-hidden="true" />
           </Button>
         )}
-        <Button variant="ghost" size="icon" title="Edit" onClick={onEdit}>
-          <Pencil className="h-4 w-4" />
+        <Button
+          variant="ghost"
+          size="icon"
+          title="Edit"
+          aria-label={`Edit "${name}"`}
+          onClick={onEdit}
+        >
+          <Pencil className="h-4 w-4" aria-hidden="true" />
         </Button>
-        <Button variant="ghost" size="icon" title="Delete" onClick={onDelete}>
-          <Trash2 className="h-4 w-4" />
+        <Button
+          variant="ghost"
+          size="icon"
+          title="Delete"
+          aria-label={`Delete "${name}"`}
+          onClick={onDelete}
+        >
+          <Trash2 className="h-4 w-4" aria-hidden="true" />
         </Button>
       </div>
     </div>
+  );
+}
+
+/** One "Snooze" button instead of three, so a fired row stays readable. */
+function SnoozeMenu({ onSnooze }: { onSnooze: (minutes: number) => void }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button variant="ghost" size="sm">
+          <BellRing aria-hidden="true" />
+          Snooze
+          <ChevronDown aria-hidden="true" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-44 gap-0.5 p-1">
+        {SNOOZE_OPTIONS.map((o) => (
+          <Button
+            key={o.minutes}
+            variant="ghost"
+            size="sm"
+            className="justify-start"
+            onClick={() => {
+              setOpen(false);
+              onSnooze(o.minutes);
+            }}
+          >
+            {o.minutes >= 60 * 24 ? "Until tomorrow" : `For ${o.label}`}
+          </Button>
+        ))}
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -332,7 +374,7 @@ function ReminderEditor({ initial, onClose, onSaved }: ReminderEditorProps) {
       onSaved();
       onClose();
     } catch (e: unknown) {
-      setError(String(e));
+      setError(`Couldn't save the reminder: ${errorMessage(e)}`);
     } finally {
       setSaving(false);
     }
@@ -344,12 +386,13 @@ function ReminderEditor({ initial, onClose, onSaved }: ReminderEditorProps) {
         <h2 className="font-medium">{initial.id ? "Edit reminder" : "New reminder"}</h2>
         <Input
           autoFocus
+          aria-label="What to be reminded about"
           value={text}
           placeholder="Follow up on this email"
           onChange={(e) => setText(e.target.value)}
         />
         <DateTimePicker value={when} onChange={setWhen} />
-        {error && <p className="text-destructive text-sm">{error}</p>}
+        {error && <InlineStatus>{error}</InlineStatus>}
         <div className="flex items-center gap-2">
           <Button onClick={() => void submit()} disabled={saving}>
             Save

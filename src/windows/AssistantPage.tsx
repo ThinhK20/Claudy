@@ -19,8 +19,17 @@ import {
 } from "lucide-react";
 import { ThemeProvider } from "@/components/theme-provider";
 import { Button } from "@/components/ui/button";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { InlineStatus } from "@/components/inline-status";
 import { LevelBars } from "@/components/transcription/level-bars";
 import { useSettings } from "@/lib/settings-store";
+import { errorMessage } from "@/lib/error-message";
+import { cn } from "@/lib/utils";
 import { insertAtCursor } from "@/lib/insert-at-cursor";
 import { useMicTranscription } from "@/lib/use-mic-transcription";
 import {
@@ -45,6 +54,7 @@ import {
   setAssistantDialogOpen,
   stopAssistantSpeech,
   type AssistantPhase,
+  type ImageAttachment,
 } from "@/lib/assistant-api";
 import {
   fileToAttachment,
@@ -121,6 +131,9 @@ function AssistantPanel() {
 
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  // The images sent with the last question. The box clears its attachments
+  // once the answer panel opens, so Retry needs its own copy.
+  const lastImagesRef = useRef<ImageAttachment[]>([]);
 
   const remindMode = mode === "remind";
   const hasAttachments = attachments.length > 0;
@@ -399,7 +412,7 @@ function AssistantPanel() {
       await closeAssistant();
     } catch (e: unknown) {
       // Keep the draft so the user can add a time instead of retyping.
-      setReminderError(String(e));
+      setReminderError(errorMessage(e));
     } finally {
       setSavingReminder(false);
     }
@@ -417,10 +430,9 @@ function AssistantPanel() {
     const q = draft.trim();
     if (!q && attachments.length === 0) return;
     if (attachments.length > 0 && !supportsImages) return;
-    void askAssistant(
-      q,
-      attachments.map((a) => ({ mediaType: a.mediaType, data: a.data })),
-    );
+    const images = attachments.map((a) => ({ mediaType: a.mediaType, data: a.data }));
+    lastImagesRef.current = images;
+    void askAssistant(q, images);
   }, [remindMode, saveReminder, draft, attachments, supportsImages]);
 
   const submitRef = useRef(submit);
@@ -437,6 +449,20 @@ function AssistantPanel() {
     }, CONFIRM_MS);
     return () => clearTimeout(id);
   }, [voiceStage]);
+
+  // The clickable twin of Shift+Tab. Focus goes back to the box so typing
+  // carries on where it was.
+  const chooseMode = (next: Mode) => {
+    cancelVoice();
+    if (next !== mode) toggleMode();
+    textareaRef.current?.focus();
+  };
+
+  const micHint = !hasSttModel
+    ? "Download and select a speech model on the Dictation page to use voice"
+    : mic.state === "recording"
+      ? "Stop recording"
+      : "Record voice prompt";
 
   const onInputKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // Any key means the user is taking over — stop the automatic send.
@@ -460,6 +486,7 @@ function AssistantPanel() {
   };
 
   return (
+    <TooltipProvider delayDuration={300}>
     <div className="text-foreground flex h-screen flex-col overflow-hidden">
       {phase === "input" && (
         <div
@@ -470,16 +497,16 @@ function AssistantPanel() {
           className="bg-popover border-border flex h-full flex-col gap-2 rounded-xl border p-3 shadow-lg"
         >
           {remindMode && (
-            <div className="text-muted-foreground flex items-center gap-1.5 text-[11px] font-medium tracking-wide uppercase">
-              <AlarmClock className="h-3 w-3" />
+            <div className="text-muted-foreground flex items-center gap-1.5 text-xs font-medium">
+              <AlarmClock className="h-3.5 w-3.5" aria-hidden="true" />
               Remind me
             </div>
           )}
           {/* Shares the Remind Mode label row, never stacks with it — the
               window is sized for exactly one such row. */}
           {followUp && (
-            <div className="text-muted-foreground flex items-center gap-1.5 text-[11px] font-medium tracking-wide uppercase">
-              <MessagesSquare className="h-3 w-3" />
+            <div className="text-muted-foreground flex items-center gap-1.5 text-xs font-medium">
+              <MessagesSquare className="h-3.5 w-3.5" aria-hidden="true" />
               {followUp}
             </div>
           )}
@@ -492,13 +519,15 @@ function AssistantPanel() {
                     alt="Attached image"
                     className="border-border h-16 w-16 rounded-md border object-cover"
                   />
+                  {/* 24px target, overlapping the thumbnail's corner. */}
                   <button
                     type="button"
                     onClick={() => removeAttachment(a.id)}
                     aria-label="Remove image"
-                    className="bg-background border-border text-foreground absolute -top-1.5 -right-1.5 rounded-full border p-0.5 shadow"
+                    title="Remove image"
+                    className="bg-background border-border text-foreground hover:bg-muted focus-visible:ring-ring absolute -top-2 -right-2 flex size-6 items-center justify-center rounded-full border shadow outline-none focus-visible:ring-2"
                   >
-                    <X className="h-3 w-3" />
+                    <X className="h-3.5 w-3.5" aria-hidden="true" />
                   </button>
                 </div>
               ))}
@@ -506,6 +535,7 @@ function AssistantPanel() {
           )}
           <textarea
             ref={textareaRef}
+            aria-label={remindMode ? "What to be reminded about" : "Your question"}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={onInputKeyDown}
@@ -519,14 +549,19 @@ function AssistantPanel() {
           />
           {remindMode && <ReminderChip {...{ draft, preview, savingReminder, reminderError }} />}
           {imagesBlocked && (
-            <p className="text-destructive text-xs">
-              The current model can't read images — remove them or switch provider in Settings.
-            </p>
+            <InlineStatus className="text-xs">
+              The current model can't read images — remove them or switch provider on the
+              Providers page.
+            </InlineStatus>
           )}
-          {mic.error && <p className="text-destructive text-xs">{mic.error}</p>}
-          {voiceNote && <p className="text-muted-foreground text-xs">{voiceNote}</p>}
+          {mic.error && <InlineStatus className="text-xs">{mic.error}</InlineStatus>}
+          {voiceNote && (
+            <InlineStatus tone="info" className="text-xs">
+              {voiceNote}
+            </InlineStatus>
+          )}
           <div className="text-muted-foreground flex items-center justify-between gap-2 text-xs">
-            <span data-tauri-drag-region className="select-none">
+            <span data-tauri-drag-region className="min-w-0 truncate select-none">
               {voiceStage === "listening"
                 ? "Listening… just pause when you're done"
                 : voiceStage === "confirming"
@@ -535,7 +570,34 @@ function AssistantPanel() {
                     ? "Enter to save · Shift+Tab to Ask · Esc to close"
                     : askHint}
             </span>
-            <div className="flex items-center gap-1">
+            <div className="flex shrink-0 items-center gap-1">
+              <div
+                role="group"
+                aria-label="Mode"
+                className="bg-muted mr-1 flex rounded-md p-0.5"
+              >
+                {(["ask", "remind"] as const).map((m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    aria-pressed={mode === m}
+                    title={
+                      mode === m
+                        ? undefined
+                        : `Switch to ${m === "ask" ? "Ask" : "Remind"} (Shift+Tab)`
+                    }
+                    onClick={() => chooseMode(m)}
+                    className={cn(
+                      "focus-visible:ring-ring rounded px-2 py-1 text-xs font-medium outline-none focus-visible:ring-2",
+                      mode === m
+                        ? "bg-background text-foreground shadow-sm"
+                        : "text-muted-foreground hover:text-foreground",
+                    )}
+                  >
+                    {m === "ask" ? "Ask" : "Remind"}
+                  </button>
+                ))}
+              </div>
               <input
                 ref={fileInputRef}
                 type="file"
@@ -544,34 +606,47 @@ function AssistantPanel() {
                 hidden
                 onChange={onFilePicked}
               />
-              <Button
-                size="sm"
-                variant={mic.state === "recording" ? "destructive" : "ghost"}
-                aria-label={
-                  !hasSttModel
-                    ? "Select a speech model in Settings to use voice"
-                    : mic.state === "recording"
-                      ? "Stop recording"
-                      : "Record voice prompt"
-                }
-                disabled={!hasSttModel || mic.state === "transcribing"}
-                onClick={mic.toggle}
-              >
-                {mic.state === "transcribing" ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : mic.state === "recording" ? (
-                  <LevelBars level={mic.level} />
-                ) : (
-                  <Mic className="h-4 w-4" />
-                )}
-              </Button>
+              {/* A disabled button gets no pointer events, so the tooltip
+                  hangs off a focusable wrapper that does. */}
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="inline-flex" tabIndex={hasSttModel ? undefined : 0}>
+                    <Button
+                      size="sm"
+                      variant={mic.state === "recording" ? "destructive" : "ghost"}
+                      aria-label={micHint}
+                      disabled={!hasSttModel || mic.state === "transcribing"}
+                      onClick={mic.toggle}
+                    >
+                      {mic.state === "transcribing" ? (
+                        <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                      ) : mic.state === "recording" ? (
+                        <LevelBars level={mic.level} />
+                      ) : (
+                        <Mic className="h-4 w-4" aria-hidden="true" />
+                      )}
+                    </Button>
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="top" className="max-w-56">
+                  {micHint}
+                </TooltipContent>
+              </Tooltip>
               {!remindMode && (
-                <Button size="sm" variant="ghost" aria-label="Attach image" onClick={openPicker}>
-                  <Paperclip className="h-4 w-4" />
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  aria-label="Attach image"
+                  title="Attach image"
+                  onClick={openPicker}
+                >
+                  <Paperclip className="h-4 w-4" aria-hidden="true" />
                 </Button>
               )}
               <Button size="sm" onClick={submit} disabled={!canSend}>
-                {savingReminder && <Loader2 className="h-4 w-4 animate-spin" />}
+                {savingReminder && (
+                  <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                )}
                 {remindMode ? "Remind" : "Ask"}
               </Button>
             </div>
@@ -589,10 +664,14 @@ function AssistantPanel() {
           modelNote={modelNote}
           panelCloseSecs={panelCloseSecs}
           keepOpenWhileSpeaking={keepOpenWhileSpeaking}
-          onRetry={() => question.trim() && void askAssistant(question)}
+          onRetry={() => {
+            const images = lastImagesRef.current;
+            if (question.trim() || images.length > 0) void askAssistant(question, images);
+          }}
         />
       )}
     </div>
+    </TooltipProvider>
   );
 }
 
@@ -611,14 +690,14 @@ interface ReminderChipProps {
 function ReminderChip({ draft, preview, savingReminder, reminderError }: ReminderChipProps) {
   if (savingReminder) {
     return (
-      <p className="text-muted-foreground flex items-center gap-1.5 text-xs">
-        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+      <p role="status" className="text-muted-foreground flex items-center gap-1.5 text-xs">
+        <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
         Working out when…
       </p>
     );
   }
   if (reminderError) {
-    return <p className="text-destructive text-xs">{reminderError}</p>;
+    return <InlineStatus className="text-xs">{reminderError}</InlineStatus>;
   }
   if (preview?.dueAt) {
     return (
@@ -689,18 +768,51 @@ function ResponsePanel({
   const [copied, setCopied] = useState(false);
   const [hovering, setHovering] = useState(false);
   const [activity, setActivity] = useState(0);
+  // True once the user drives the panel from the keyboard (Tab and friends);
+  // like hovering, it holds the auto-close until focus leaves the panel or
+  // the mouse takes over.
+  const [keyboardFocus, setKeyboardFocus] = useState(false);
+  const askAnotherRef = useRef<HTMLButtonElement | null>(null);
+
+  const hasAnswer = phase === "answering" || phase === "speaking";
+  const countdownActive =
+    panelCloseSecs > 0 &&
+    (phase === "answering" || (phase === "speaking" && !keepOpenWhileSpeaking));
+  const countdownPaused = hovering || keyboardFocus;
 
   // Auto-close: while an answer is shown — and during speech when the user
-  // opted out of keeping the panel open — paused on hover and reset on any
-  // interaction. 0 disables it entirely. Closing mid-speech stops playback.
+  // opted out of keeping the panel open — paused on hover or keyboard focus
+  // and reset on any interaction. 0 disables it entirely. Closing mid-speech
+  // stops playback.
   useEffect(() => {
-    const countdownActive =
-      phase === "answering" || (phase === "speaking" && !keepOpenWhileSpeaking);
-    if (!countdownActive) return;
-    if (panelCloseSecs <= 0 || hovering) return;
+    if (!countdownActive || countdownPaused) return;
     const t = setTimeout(() => void closeAssistant(), panelCloseSecs * 1000);
     return () => clearTimeout(t);
-  }, [phase, panelCloseSecs, keepOpenWhileSpeaking, hovering, activity]);
+  }, [countdownActive, countdownPaused, panelCloseSecs, activity]);
+
+  // Esc closes the panel wherever focus is, not only inside a control.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      void closeAssistant();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // Land on "Ask another" once per answer, so Enter/Space continues the
+  // conversation and Tab reaches Copy and Close.
+  const focusedForAnswerRef = useRef(false);
+  useEffect(() => {
+    if (!hasAnswer) {
+      focusedForAnswerRef.current = false;
+      return;
+    }
+    if (focusedForAnswerRef.current) return;
+    focusedForAnswerRef.current = true;
+    askAnotherRef.current?.focus({ preventScroll: true });
+  }, [hasAnswer]);
 
   const copy = async () => {
     try {
@@ -730,7 +842,15 @@ function ResponsePanel({
       className="bg-popover border-border relative flex h-full flex-col rounded-xl border shadow-lg"
       onMouseEnter={() => setHovering(true)}
       onMouseLeave={() => setHovering(false)}
-      onKeyDownCapture={() => setActivity((n) => n + 1)}
+      onKeyDownCapture={(e) => {
+        setActivity((n) => n + 1);
+        if (e.key !== "Escape") setKeyboardFocus(true);
+      }}
+      onPointerDownCapture={() => setKeyboardFocus(false)}
+      onBlurCapture={(e) => {
+        const next = e.relatedTarget as Node | null;
+        if (!next || !e.currentTarget.contains(next)) setKeyboardFocus(false);
+      }}
       onScrollCapture={() => setActivity((n) => n + 1)}
     >
       <div
@@ -744,16 +864,12 @@ function ResponsePanel({
 
       <div className="min-h-0 flex-1 overflow-y-auto px-3 py-2 text-sm">
         {phase === "loading" && (
-          <div className="text-muted-foreground flex items-center gap-2">
-            <Loader2 className="h-4 w-4 animate-spin" />
+          <div role="status" className="text-muted-foreground flex items-center gap-2">
+            <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
             <span>Thinking…</span>
           </div>
         )}
-        {phase === "error" && (
-          <p className="text-destructive whitespace-pre-wrap">
-            {message ?? "Something went wrong"}
-          </p>
-        )}
+        {phase === "error" && <InlineStatus>{message ?? "Something went wrong."}</InlineStatus>}
         {(phase === "answering" || phase === "speaking") && (
           <Markdown remarkPlugins={[remarkGfm]} components={MD_COMPONENTS}>
             {answer}
@@ -765,7 +881,7 @@ function ResponsePanel({
           different model than the one configured. */}
       {modelNote && (
         <p className="text-muted-foreground border-border flex shrink-0 items-start gap-1.5 border-t px-3 py-1.5 text-xs">
-          <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
           {modelNote}
         </p>
       )}
@@ -774,6 +890,30 @@ function ResponsePanel({
         <p className="text-muted-foreground border-border shrink-0 border-t px-3 py-1.5 text-xs">
           {ttsError}
         </p>
+      )}
+
+      {/* Time left before auto-close. Restarts from full on any interaction
+          and stays full while paused; static under reduced motion (see
+          .countdown-bar in index.css). */}
+      {countdownActive && (
+        <div
+          className="bg-border h-0.5 shrink-0 overflow-hidden"
+          title={
+            countdownPaused
+              ? "Auto-close paused"
+              : `Closes automatically after ${panelCloseSecs} seconds`
+          }
+          aria-hidden="true"
+        >
+          <div
+            key={`${activity}-${countdownPaused}`}
+            className={cn(
+              "bg-muted-foreground h-full origin-left",
+              countdownPaused ? "opacity-40" : "countdown-bar",
+            )}
+            style={{ "--countdown-duration": `${panelCloseSecs}s` } as React.CSSProperties}
+          />
+        </div>
       )}
 
       <div className="border-border flex shrink-0 items-center justify-end gap-2 border-t px-3 py-2">
@@ -805,7 +945,12 @@ function ResponsePanel({
               )}
               {copied ? "Copied" : "Copy"}
             </Button>
-            <Button variant="outline" size="sm" onClick={() => void assistantNewQuestion()}>
+            <Button
+              ref={askAnotherRef}
+              variant="outline"
+              size="sm"
+              onClick={() => void assistantNewQuestion()}
+            >
               <RotateCw className="h-4 w-4" />
               Ask another
             </Button>

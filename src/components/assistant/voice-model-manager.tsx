@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
+import { ConfirmDialog } from "@/components/confirm-dialog";
+import { InlineStatus } from "@/components/inline-status";
+import { errorMessage } from "@/lib/error-message";
 import {
   deleteTtsModel,
   downloadTtsModel,
@@ -16,12 +19,13 @@ export function VoiceModelManager() {
   const [progress, setProgress] = useState<Record<string, DownloadProgress | undefined>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
       setAssets(await ttsModelStatus());
     } catch (e: unknown) {
-      setError(String(e));
+      setError(`Couldn't check the voice model: ${errorMessage(e)}`);
     }
   }, []);
 
@@ -58,7 +62,7 @@ export function VoiceModelManager() {
       }
       await refresh();
     } catch (e: unknown) {
-      setError(String(e));
+      setError(`Download failed: ${errorMessage(e)}`);
     } finally {
       setBusy(false);
     }
@@ -73,7 +77,7 @@ export function VoiceModelManager() {
       setProgress({});
       await refresh();
     } catch (e: unknown) {
-      setError(String(e));
+      setError(`Couldn't delete the voice model: ${errorMessage(e)}`);
     }
   };
 
@@ -89,7 +93,7 @@ export function VoiceModelManager() {
           </p>
         </div>
         {allDownloaded ? (
-          <Button variant="outline" size="sm" onClick={handleDelete}>
+          <Button variant="outline" size="sm" onClick={() => setConfirmDelete(true)}>
             Delete
           </Button>
         ) : active ? (
@@ -123,7 +127,16 @@ export function VoiceModelManager() {
         </div>
       )}
 
-      {error && <p className="text-destructive text-sm">{error}</p>}
+      {error && <InlineStatus onDismiss={() => setError(null)}>{error}</InlineStatus>}
+
+      <ConfirmDialog
+        open={confirmDelete}
+        onOpenChange={setConfirmDelete}
+        title="Delete the voice model?"
+        description="Answers can't be spoken aloud until you download it again (about 115 MB)."
+        confirmLabel="Delete"
+        onConfirm={() => void handleDelete()}
+      />
     </div>
   );
 }

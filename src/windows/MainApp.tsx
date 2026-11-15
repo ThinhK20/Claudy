@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { AppSidebar, type PageKey } from "@/components/app-sidebar";
+import { AppSidebar, type PageKey, type PageProps } from "@/components/app-sidebar";
 import { ThemeProvider } from "@/components/theme-provider";
 import { useSettings } from "@/lib/settings-store";
 import { onNavigate } from "@/lib/dictation-api";
@@ -11,7 +11,7 @@ import UsagePage from "@/pages/UsagePage";
 import ProvidersPage from "@/pages/ProvidersPage";
 import SettingsPage from "@/pages/SettingsPage";
 
-const PAGES: Record<PageKey, React.ComponentType> = {
+const PAGES: Record<PageKey, React.ComponentType<PageProps>> = {
   prompts: PromptsPage,
   transcription: TranscriptionPage,
   assistant: AssistantSettingsPage,
@@ -25,8 +25,9 @@ export default function MainApp() {
   const [page, setPage] = useState<PageKey>("prompts");
   const load = useSettings((s) => s.load);
 
+  // The failure is kept in the store; each page shows it with a Retry.
   useEffect(() => {
-    load();
+    load().catch(() => {});
   }, [load]);
 
   useEffect(() => {
@@ -44,7 +45,7 @@ export default function MainApp() {
       <div className="bg-background text-foreground flex h-screen">
         <AppSidebar page={page} onNavigate={setPage} />
         <main className="flex-1 overflow-y-auto">
-          <Page />
+          <Page onNavigate={setPage} />
         </main>
       </div>
     </ThemeProvider>

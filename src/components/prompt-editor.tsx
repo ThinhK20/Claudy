@@ -12,8 +12,10 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
+import { InlineStatus } from "@/components/inline-status";
 import { ShortcutInput } from "@/components/shortcut-input";
 import { savePrompt, type Prompt } from "@/lib/ai-api";
+import { errorMessage } from "@/lib/error-message";
 
 export const EMPTY_PROMPT: Prompt = {
   id: "",
@@ -52,7 +54,7 @@ export function PromptEditor({ initial, onClose, onSaved }: PromptEditorProps) {
       onSaved();
       onClose();
     } catch (e: unknown) {
-      setError(String(e));
+      setError(`Couldn't save the prompt: ${errorMessage(e)}`);
     } finally {
       setSaving(false);
     }
@@ -112,7 +114,7 @@ export function PromptEditor({ initial, onClose, onSaved }: PromptEditorProps) {
               onCheckedChange={(enabled) => setDraft({ ...draft, enabled })}
             />
           </div>
-          {error && <p className="text-destructive text-sm">{error}</p>}
+          {error && <InlineStatus>{error}</InlineStatus>}
         </div>
 
         <DialogFooter>

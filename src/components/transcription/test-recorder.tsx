@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { InlineStatus } from "@/components/inline-status";
+import { errorMessage } from "@/lib/error-message";
 import { useSettings } from "@/lib/settings-store";
 import { startCapture, stopCaptureAndTranscribe } from "@/lib/stt-api";
 
@@ -31,7 +33,7 @@ export function TestRecorder() {
         setState("idle");
       }
     } catch (e: unknown) {
-      setError(String(e));
+      setError(`Test failed: ${errorMessage(e)}`);
       setState("idle");
     }
   };
@@ -41,13 +43,13 @@ export function TestRecorder() {
       <CardHeader>
         <CardTitle>Test transcription</CardTitle>
         <CardDescription>
-          Record a short clip and transcribe it with the active model
+          Record a short clip and transcribe it with the active speech model.
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
         {!hasModel && (
           <p className="text-muted-foreground text-sm">
-            Download and select a model above to enable the test.
+            Download and select a speech model above to enable the test.
           </p>
         )}
         <div>
@@ -57,7 +59,7 @@ export function TestRecorder() {
             {state === "transcribing" && "Transcribing…"}
           </Button>
         </div>
-        {error && <p className="text-destructive text-sm">{error}</p>}
+        {error && <InlineStatus>{error}</InlineStatus>}
         {result !== null && (
           <div className="rounded-md border p-3">
             <p className="text-sm whitespace-pre-wrap">{result || "(no speech detected)"}</p>

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Ear, TriangleAlert } from "lucide-react";
+import { Ear } from "lucide-react";
 import {
   Card,
   CardContent,
@@ -16,6 +16,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { InlineStatus } from "@/components/inline-status";
 import { ToggleRow } from "@/components/toggle-row";
 import { listModels, type ModelInfo } from "@/lib/stt-api";
 import { checkWakePhrase, onWakeState, wakeWordListening } from "@/lib/wake-api";
@@ -100,8 +101,8 @@ export function WakeWordCard({ onChange }: WakeWordCardProps) {
           Wake word
           {listening && (
             <span className="text-muted-foreground inline-flex items-center gap-1 text-xs font-normal">
-              <Ear className="h-3.5 w-3.5" />
-              listening
+              <Ear className="h-3.5 w-3.5" aria-hidden="true" />
+              Listening
             </span>
           )}
         </CardTitle>
@@ -134,10 +135,9 @@ export function WakeWordCard({ onChange }: WakeWordCardProps) {
             }}
           />
           {phraseWarning && (
-            <p className="text-muted-foreground mt-2 flex items-start gap-1.5 text-sm">
-              <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            <InlineStatus tone="warning" className="mt-2">
               {phraseWarning}
-            </p>
+            </InlineStatus>
           )}
         </div>
 
@@ -146,7 +146,7 @@ export function WakeWordCard({ onChange }: WakeWordCardProps) {
             <Label>Detection model</Label>
             <p className="text-muted-foreground text-sm">
               Runs every time you speak nearby, so keep it small. Separate from
-              the model used for dictation.
+              the speech model used for dictation.
             </p>
           </div>
           <Select
@@ -154,7 +154,7 @@ export function WakeWordCard({ onChange }: WakeWordCardProps) {
             onValueChange={(model) => onChange({ model })}
             disabled={downloaded.length === 0}
           >
-            <SelectTrigger className="w-52">
+            <SelectTrigger className="w-52" aria-label="Detection model">
               <SelectValue placeholder="No models downloaded" />
             </SelectTrigger>
             <SelectContent>
@@ -168,11 +168,11 @@ export function WakeWordCard({ onChange }: WakeWordCardProps) {
         </div>
 
         {modelMissing && (
-          <p className="text-destructive text-sm">
+          <InlineStatus tone="warning">
             {downloaded.length === 0
-              ? "No speech models are downloaded yet — get one on the Transcription page before turning this on."
-              : `Model "${wake.model}" is not downloaded. Pick one above, or download it on the Transcription page.`}
-          </p>
+              ? "No speech models are downloaded yet — get one on the Dictation page before turning this on."
+              : `Speech model "${wake.model}" is not downloaded. Pick one above, or download it on the Dictation page.`}
+          </InlineStatus>
         )}
 
         <div className="flex items-center justify-between gap-4">
@@ -187,7 +187,7 @@ export function WakeWordCard({ onChange }: WakeWordCardProps) {
             value={wake.sensitivity}
             onValueChange={(v) => onChange({ sensitivity: v as WakeSensitivity })}
           >
-            <SelectTrigger className="w-36">
+            <SelectTrigger className="w-36" aria-label="Sensitivity">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -200,7 +200,7 @@ export function WakeWordCard({ onChange }: WakeWordCardProps) {
           </Select>
         </div>
 
-        {error && <p className="text-destructive text-sm">{error}</p>}
+        {error && <InlineStatus>{error}</InlineStatus>}
       </CardContent>
     </Card>
   );

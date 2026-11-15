@@ -3,6 +3,9 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
+import { ConfirmDialog } from "@/components/confirm-dialog";
+import { InlineStatus } from "@/components/inline-status";
+import { errorMessage } from "@/lib/error-message";
 import { useSettings } from "@/lib/settings-store";
 import {
   cancelModelDownload,
@@ -20,6 +23,7 @@ export function ModelManager() {
   const [modelsDir, setModelsDir] = useState("");
   const [progress, setProgress] = useState<Record<string, DownloadProgress | undefined>>({});
   const [error, setError] = useState<string | null>(null);
+  const [toDelete, setToDelete] = useState<ModelInfo | null>(null);
   const activeModel = useSettings((s) => s.settings?.model ?? "");
   const updateSettings = useSettings((s) => s.update);
 
@@ -28,7 +32,7 @@ export function ModelManager() {
       setModels(await listModels());
       setModelsDir(await getModelsDir());
     } catch (e: unknown) {
-      setError(String(e));
+      setError(`Couldn't list speech models: ${errorMessage(e)}`);
     }
   }, []);
 
@@ -50,7 +54,7 @@ export function ModelManager() {
     try {
       await downloadModel(id);
     } catch (e: unknown) {
-      setError(String(e));
+      setError(`Download failed: ${errorMessage(e)}`);
     }
   };
 
@@ -62,20 +66,31 @@ export function ModelManager() {
       setProgress((prev) => ({ ...prev, [id]: undefined }));
       await refresh();
     } catch (e: unknown) {
-      setError(String(e));
+      setError(`Couldn't delete the model: ${errorMessage(e)}`);
+    }
+  };
+
+  const useModel = async (id: string) => {
+    setError(null);
+    try {
+      await updateSettings({ model: id });
+    } catch (e: unknown) {
+      setError(`Couldn't switch models: ${errorMessage(e)}`);
     }
   };
 
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Models</CardTitle>
+        <CardTitle>Speech models</CardTitle>
         <CardDescription>
-          Whisper models are stored in <code className="text-xs">{modelsDir}</code>
+          Whisper speech models turn your voice into text on this computer. Larger
+          models are more accurate but slower. Stored in{" "}
+          <code className="text-xs break-all">{modelsDir}</code>.
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
-        {error && <p className="text-destructive text-sm">{error}</p>}
+        {error && <InlineStatus onDismiss={() => setError(null)}>{error}</InlineStatus>}
         {models.map((m) => {
           const p = progress[m.id];
           const isDownloading = p?.status === "downloading" || p?.status === "verifying";
@@ -108,16 +123,16 @@ export function ModelManager() {
               ) : m.downloaded ? (
                 <div className="flex gap-2">
                   {activeModel !== m.id && (
-                    <Button size="sm" onClick={() => updateSettings({ model: m.id })}>
+                    <Button size="sm" onClick={() => void useModel(m.id)}>
                       Use
                     </Button>
                   )}
-                  <Button variant="outline" size="sm" onClick={() => handleDelete(m.id)}>
+                  <Button variant="outline" size="sm" onClick={() => setToDelete(m)}>
                     Delete
                   </Button>
                 </div>
               ) : (
-                <Button size="sm" onClick={() => handleDownload(m.id)}>
+                <Button size="sm" onClick={() => void handleDownload(m.id)}>
                   Download
                 </Button>
               )}
@@ -125,6 +140,24 @@ export function ModelManager() {
           );
         })}
       </CardContent>
+
+      <ConfirmDialog
+        open={toDelete !== null}
+        onOpenChange={(open) => {
+          if (!open) setToDelete(null);
+        }}
+        title={`Delete the ${toDelete?.label ?? ""} speech model?`}
+        description={
+          toDelete && activeModel === toDelete.id
+            ? `Dictation uses this model now, so it stops working until you pick another. To use it again you'd re-download ${toDelete.diskSize}.`
+            : `The file is removed from disk. To use it again you'd re-download ${toDelete?.diskSize ?? "it"}.`
+        }
+        confirmLabel="Delete"
+        onConfirm={() => {
+          if (toDelete) void handleDelete(toDelete.id);
+          setToDelete(null);
+        }}
+      />
     </Card>
   );
 }

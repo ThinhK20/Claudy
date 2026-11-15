@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
-import { Copy, Download, Pencil, Play, Plus, Trash2, Upload } from "lucide-react";
+import { Copy, Download, Loader2, Pencil, Play, Plus, Trash2, Upload } from "lucide-react";
 import { open as openFile, save as saveFile } from "@tauri-apps/plugin-dialog";
+import type { PageProps } from "@/components/app-sidebar";
+import { InlineStatus } from "@/components/inline-status";
+import { Page } from "@/components/page";
 import { EMPTY_PROMPT, PromptEditor } from "@/components/prompt-editor";
+import { SetupChecklist } from "@/components/setup-checklist";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -26,21 +30,25 @@ import {
   savePrompt,
   type Prompt,
 } from "@/lib/ai-api";
+import { errorMessage } from "@/lib/error-message";
 
-export default function PromptsPage() {
+export default function PromptsPage({ onNavigate }: PageProps) {
   const [prompts, setPrompts] = useState<Prompt[]>([]);
   const [search, setSearch] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [toDelete, setToDelete] = useState<Prompt | null>(null);
   const [editing, setEditing] = useState<Prompt | null>(null);
   const [report, setReport] = useState<string | null>(null);
+  // Per-row "Run now" state: which prompts are in flight, and why one failed.
+  const [running, setRunning] = useState<ReadonlySet<string>>(new Set());
+  const [runErrors, setRunErrors] = useState<Record<string, string>>({});
 
   const reload = useCallback(async () => {
     try {
       setPrompts(await listPrompts());
       setError(null);
     } catch (e: unknown) {
-      setError(String(e));
+      setError(`Couldn't load prompts: ${errorMessage(e)}`);
     }
   }, []);
 
@@ -61,7 +69,33 @@ export default function PromptsPage() {
       await op();
       await reload();
     } catch (e: unknown) {
-      setError(String(e));
+      setError(errorMessage(e));
+    }
+  };
+
+  const clearRunError = (id: string) =>
+    setRunErrors((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+
+  // `run_prompt` only starts the run (the result and its errors arrive as a
+  // notification), so this covers the hand-off: a rejected invoke is shown on
+  // the row instead of being dropped.
+  const runNow = async (p: Prompt) => {
+    setRunning((prev) => new Set(prev).add(p.id));
+    clearRunError(p.id);
+    try {
+      await runPrompt(p.id);
+    } catch (e: unknown) {
+      setRunErrors((prev) => ({ ...prev, [p.id]: `Run failed: ${errorMessage(e)}` }));
+    } finally {
+      setRunning((prev) => {
+        const next = new Set(prev);
+        next.delete(p.id);
+        return next;
+      });
     }
   };
 
@@ -92,7 +126,7 @@ export default function PromptsPage() {
       const count = await exportPrompts(path);
       setReport(`Exported ${count} prompt${count === 1 ? "" : "s"}.`);
     } catch (e: unknown) {
-      setError(String(e));
+      setError(`Export failed: ${errorMessage(e)}`);
     }
   };
 
@@ -110,23 +144,22 @@ export default function PromptsPage() {
           (notes.length ? ` ${notes.join("; ")}` : ""),
       );
     } catch (e: unknown) {
-      setError(String(e));
+      setError(`Import failed: ${errorMessage(e)}`);
     }
   };
 
   return (
-    <div className="flex flex-col gap-6 p-6">
-      <div>
-        <h1 className="text-2xl font-semibold">Prompts</h1>
-        <p className="text-muted-foreground mt-1">
-          AI prompts that run on selected text via global shortcuts.
-        </p>
-      </div>
+    <Page
+      title="Prompts"
+      description="AI prompts that run on the text you select, each from its own global shortcut."
+    >
+      <SetupChecklist onNavigate={onNavigate} />
 
       <div className="flex items-center gap-3">
         <Input
           value={search}
           placeholder="Search prompts…"
+          aria-label="Search prompts"
           onChange={(e) => setSearch(e.target.value)}
           className="max-w-sm"
         />
@@ -146,8 +179,12 @@ export default function PromptsPage() {
         </div>
       </div>
 
-      {error && <p className="text-destructive text-sm">{error}</p>}
-      {report && <p className="text-muted-foreground text-sm">{report}</p>}
+      {error && <InlineStatus onDismiss={() => setError(null)}>{error}</InlineStatus>}
+      {report && (
+        <InlineStatus tone="success" onDismiss={() => setReport(null)}>
+          {report}
+        </InlineStatus>
+      )}
 
       <Card>
         <CardContent className="p-0">
@@ -156,64 +193,81 @@ export default function PromptsPage() {
               {prompts.length === 0 ? "No prompts yet." : "No prompts match your search."}
             </p>
           )}
-          {visible.map((p) => (
-            <div
-              key={p.id}
-              className="flex items-center gap-3 border-b px-4 py-3 last:border-b-0"
-            >
-              <Switch
-                checked={p.enabled}
-                onCheckedChange={() => void toggleEnabled(p)}
-                aria-label={`Enable ${p.name}`}
-              />
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <span className="truncate font-medium">{p.name}</span>
-                  {p.shortcut && (
-                    <Badge variant="secondary" className="font-mono">
-                      {p.shortcut}
-                    </Badge>
-                  )}
+          {visible.map((p) => {
+            const isRunning = running.has(p.id);
+            const runError = runErrors[p.id];
+            return (
+              <div key={p.id} className="border-b px-4 py-3 last:border-b-0">
+                <div className="flex items-center gap-3">
+                  <Switch
+                    checked={p.enabled}
+                    onCheckedChange={() => void toggleEnabled(p)}
+                    aria-label={`Enable ${p.name}`}
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="truncate font-medium">{p.name}</span>
+                      {p.shortcut && (
+                        <Badge variant="secondary" className="font-mono">
+                          {p.shortcut}
+                        </Badge>
+                      )}
+                    </div>
+                    <p className="text-muted-foreground truncate text-sm">{p.template}</p>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-1">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      title="Run now (uses the current clipboard/selection)"
+                      aria-label={isRunning ? `Running ${p.name}` : `Run ${p.name} now`}
+                      aria-busy={isRunning}
+                      disabled={!p.enabled || isRunning}
+                      onClick={() => void runNow(p)}
+                    >
+                      {isRunning ? (
+                        <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                      ) : (
+                        <Play className="h-4 w-4" aria-hidden="true" />
+                      )}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      title="Edit"
+                      aria-label={`Edit ${p.name}`}
+                      onClick={() => setEditing(p)}
+                    >
+                      <Pencil className="h-4 w-4" aria-hidden="true" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      title="Duplicate"
+                      aria-label={`Duplicate ${p.name}`}
+                      onClick={() => duplicate(p)}
+                    >
+                      <Copy className="h-4 w-4" aria-hidden="true" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      title="Delete"
+                      aria-label={`Delete ${p.name}`}
+                      onClick={() => setToDelete(p)}
+                    >
+                      <Trash2 className="h-4 w-4" aria-hidden="true" />
+                    </Button>
+                  </div>
                 </div>
-                <p className="text-muted-foreground truncate text-sm">{p.template}</p>
+                {runError && (
+                  <InlineStatus className="mt-2" onDismiss={() => clearRunError(p.id)}>
+                    {runError}
+                  </InlineStatus>
+                )}
               </div>
-              <div className="flex shrink-0 items-center gap-1">
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  title="Run now (uses the current clipboard/selection)"
-                  disabled={!p.enabled}
-                  onClick={() => void runPrompt(p.id)}
-                >
-                  <Play className="h-4 w-4" />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  title="Edit"
-                  onClick={() => setEditing(p)}
-                >
-                  <Pencil className="h-4 w-4" />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  title="Duplicate"
-                  onClick={() => duplicate(p)}
-                >
-                  <Copy className="h-4 w-4" />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  title="Delete"
-                  onClick={() => setToDelete(p)}
-                >
-                  <Trash2 className="h-4 w-4" />
-                </Button>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </CardContent>
       </Card>
 
@@ -233,7 +287,9 @@ export default function PromptsPage() {
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={confirmDelete}>Delete</AlertDialogAction>
+            <AlertDialogAction variant="destructive" onClick={confirmDelete}>
+              Delete
+            </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
@@ -243,6 +299,6 @@ export default function PromptsPage() {
         onClose={() => setEditing(null)}
         onSaved={() => void reload()}
       />
-    </div>
+    </Page>
   );
 }

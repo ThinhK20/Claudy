@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { InlineStatus } from "@/components/inline-status";
 import { captureShortcut } from "@/lib/accelerator";
+import { errorMessage } from "@/lib/error-message";
 import {
   checkShortcut,
   resumeGlobalShortcuts,
@@ -86,7 +88,7 @@ export function ShortcutInput({
         if (!stale) setWarning(check.ok ? "" : check.message);
       })
       .catch((e: unknown) => {
-        if (!stale) setWarning(String(e));
+        if (!stale) setWarning(errorMessage(e));
       });
     return () => {
       stale = true;
@@ -144,8 +146,8 @@ export function ShortcutInput({
           ? `Esc cancels${allowClear ? ", Backspace clears" : ""}`
           : "Click, then press a combination like Ctrl+Shift+G. A bare F13–F24 or media key works too — but it's taken from every app system-wide."}
       </p>
-      {rejected && <p className="text-destructive text-sm">{rejected}</p>}
-      {!rejected && warning && <p className="text-destructive text-sm">{warning}</p>}
+      {rejected && <InlineStatus>{rejected}</InlineStatus>}
+      {!rejected && warning && <InlineStatus>{warning}</InlineStatus>}
     </div>
   );
 }

@@ -15,8 +15,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { InlineStatus } from "@/components/inline-status";
+import { Page } from "@/components/page";
 import { DailyBars } from "@/components/usage/daily-bars";
 import { ModelPrices } from "@/components/usage/model-prices";
+import { errorMessage } from "@/lib/error-message";
 import { useSettings } from "@/lib/settings-store";
 import {
   onUsageChanged,
@@ -39,7 +42,7 @@ export default function UsagePage() {
       setSummary(await usageSummary(range));
       setError(null);
     } catch (e: unknown) {
-      setError(String(e));
+      setError(`Couldn't load usage: ${errorMessage(e)}`);
     }
   }, [range]);
 
@@ -56,16 +59,12 @@ export default function UsagePage() {
   }, [reload]);
 
   return (
-    <div className="flex flex-col gap-6 p-6">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold">Usage</h1>
-          <p className="text-muted-foreground mt-1">
-            What you've run and what it cost. Kept on this computer only.
-          </p>
-        </div>
+    <Page
+      title="Usage"
+      description="What you've run and what it cost. Kept on this computer only."
+      actions={
         <Select value={range} onValueChange={(v) => setRange(v as UsageRange)}>
-          <SelectTrigger className="w-44">
+          <SelectTrigger className="w-44" aria-label="Time range">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -76,15 +75,22 @@ export default function UsagePage() {
             ))}
           </SelectContent>
         </Select>
-      </div>
-
-      {error && <p className="text-destructive text-sm">{error}</p>}
+      }
+    >
+      {error && (
+        <div className="flex flex-col items-start gap-2">
+          <InlineStatus>{error}</InlineStatus>
+          <Button variant="outline" size="sm" onClick={() => void reload()}>
+            Retry
+          </Button>
+        </div>
+      )}
 
       {!recording && (
         <Card>
           <CardContent className="text-muted-foreground text-sm">
             Recording is off, so nothing new is being added. Turn it back on under
-            Settings → Usage stats.
+            General → Usage stats.
           </CardContent>
         </Card>
       )}
@@ -255,7 +261,7 @@ export default function UsagePage() {
           </Card>
         </>
       )}
-    </div>
+    </Page>
   );
 }
 

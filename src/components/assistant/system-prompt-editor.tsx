@@ -8,6 +8,9 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
+import { ConfirmDialog } from "@/components/confirm-dialog";
+import { InlineStatus } from "@/components/inline-status";
+import { errorMessage } from "@/lib/error-message";
 import { useSettings } from "@/lib/settings-store";
 
 /** Mirrored by MAX_SYSTEM_PROMPT_CHARS in src-tauri/src/config.rs. */
@@ -30,6 +33,8 @@ export function SystemPromptEditor() {
   const [draft, setDraft] = useState(saved);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [justSaved, setJustSaved] = useState(false);
+  const [confirmReset, setConfirmReset] = useState(false);
 
   // Re-seed when the stored value changes underneath us (reload, other
   // window) — but not on the failed-save revert, so a rejected save never
@@ -55,16 +60,20 @@ export function SystemPromptEditor() {
   const persist = async (value: string) => {
     setSaving(true);
     setError(null);
+    setJustSaved(false);
     try {
       await update({ assistant: { ...settings.assistant, customSystemPrompt: value } });
+      setJustSaved(true);
     } catch (e: unknown) {
-      setError(String(e));
+      setError(`Couldn't save: ${errorMessage(e)}`);
       skipNextReseedRef.current = true; // keep the draft through the revert
       try {
         await load(); // update() is optimistic; show reality again
       } catch (reloadError: unknown) {
         skipNextReseedRef.current = false; // store unchanged, nothing to skip
-        setError(`${String(e)} (could not refresh settings: ${String(reloadError)})`);
+        setError(
+          `Couldn't save: ${errorMessage(e)} (could not refresh settings: ${errorMessage(reloadError)})`,
+        );
       }
     } finally {
       setSaving(false);
@@ -74,7 +83,7 @@ export function SystemPromptEditor() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Custom System Prompt</CardTitle>
+        <CardTitle>Custom system prompt</CardTitle>
         <CardDescription>
           Sent as the system instruction with every assistant question — personality, tone,
           language, format. Leave empty for the default behavior. Does not affect dictation
@@ -86,7 +95,11 @@ export function SystemPromptEditor() {
           rows={8}
           className="max-h-64 min-h-32 overflow-y-auto font-mono text-sm"
           value={draft}
-          onChange={(e) => setDraft(e.target.value)}
+          onChange={(e) => {
+            setDraft(e.target.value);
+            setJustSaved(false);
+          }}
+          aria-label="Custom system prompt"
           placeholder={PLACEHOLDER}
           aria-invalid={isWhitespaceOnly || isOverMax}
         />
@@ -108,8 +121,9 @@ export function SystemPromptEditor() {
               size="sm"
               disabled={saving || (saved === "" && draft === "")}
               onClick={() => {
-                setDraft("");
-                if (saved !== "") void persist("");
+                // Nothing saved yet: only an unsaved draft is lost, no need to ask.
+                if (saved === "") setDraft("");
+                else setConfirmReset(true);
               }}
             >
               Reset
@@ -124,18 +138,31 @@ export function SystemPromptEditor() {
           </div>
         </div>
         {isWhitespaceOnly && (
-          <p className="text-destructive text-sm">
+          <InlineStatus>
             The prompt contains only whitespace — use Reset to return to the default behavior.
-          </p>
+          </InlineStatus>
         )}
         {isOverMax && (
-          <p className="text-destructive text-sm">
+          <InlineStatus>
             The prompt exceeds {MAX_SYSTEM_PROMPT_CHARS.toLocaleString()} characters — shorten it
             to save.
-          </p>
+          </InlineStatus>
         )}
-        {error && <p className="text-destructive text-sm">{error}</p>}
+        {error && <InlineStatus>{error}</InlineStatus>}
+        {justSaved && !error && !isDirty && <InlineStatus tone="success">Saved.</InlineStatus>}
       </CardContent>
+
+      <ConfirmDialog
+        open={confirmReset}
+        onOpenChange={setConfirmReset}
+        title="Reset the system prompt?"
+        description="Your saved prompt is deleted and the assistant goes back to its default behavior. This can't be undone."
+        confirmLabel="Reset"
+        onConfirm={() => {
+          setDraft("");
+          void persist("");
+        }}
+      />
     </Card>
   );
 }
