@@ -31,6 +31,7 @@ pub fn builtin_chain(provider_id: &str) -> &'static [&'static str] {
     match provider_id {
         "gemini" => &["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash"],
         "anthropic" => &["claude-sonnet-5", "claude-haiku-4-5-20251001"],
+        "deepseek" => &["deepseek-flash", "deepseek-v4-pro"],
         _ => &[],
     }
 }
@@ -142,6 +143,18 @@ mod tests {
         assert!(builtin_chain("openai_compatible").is_empty());
         assert!(builtin_chain("ollama").is_empty());
         assert!(builtin_chain("skynet").is_empty());
+    }
+
+    #[test]
+    fn deepseek_flash_and_v4_pro_back_each_other_up() {
+        assert_eq!(
+            candidates("deepseek", "", &[], "deepseek-flash"),
+            owned(&["deepseek-flash", "deepseek-v4-pro"])
+        );
+        assert_eq!(
+            candidates("deepseek", "deepseek-v4-pro", &[], "deepseek-flash"),
+            owned(&["deepseek-v4-pro", "deepseek-flash"])
+        );
     }
 
     #[test]

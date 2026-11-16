@@ -94,7 +94,7 @@ const PROVIDERS: ProviderMeta[] = [
     label: "DeepSeek",
     defaultBaseUrl: "https://api.deepseek.com",
     defaultModel: "deepseek-flash",
-    defaultFallbacks: [],
+    defaultFallbacks: ["deepseek-flash", "deepseek-v4-pro"],
     keyHint: "Required",
   },
 ];
