@@ -263,6 +263,20 @@ mod tests {
     }
 
     #[test]
+    fn deepseek_is_priced_at_its_peak_uncached_rate() {
+        let flash = resolve("deepseek", "deepseek-flash", &[]).unwrap();
+        assert_eq!((flash.input_per_mtok, flash.output_per_mtok), (0.30, 1.20));
+        let pro = resolve("deepseek", "deepseek-v4-pro", &[]).unwrap();
+        assert_eq!((pro.input_per_mtok, pro.output_per_mtok), (1.32, 3.96));
+        // A versioned id DeepSeek reports back resolves by prefix.
+        let dated = resolve("deepseek", "DeepSeek-V4-Pro-0813", &[]).unwrap();
+        assert_eq!(dated.output_per_mtok, 3.96);
+        // The user's own price still wins.
+        let mine = resolve("deepseek", "deepseek-flash", &[price("deepseek-flash", 0.15, 0.60)]).unwrap();
+        assert_eq!((mine.input_per_mtok, mine.output_per_mtok), (0.15, 0.60));
+    }
+
+    #[test]
     fn the_default_model_of_every_provider_has_a_price() {
         // A fresh install shows a real cost estimate rather than "no price".
         for id in crate::config::PROVIDER_IDS {
