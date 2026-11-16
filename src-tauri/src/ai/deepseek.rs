@@ -5,6 +5,8 @@ use crate::config::ProviderSettings;
 pub const DEFAULT_BASE_URL: &str = "https://api.deepseek.com";
 /// The fastest DeepSeek model, and the one that accepts images.
 pub const DEFAULT_MODEL: &str = "deepseek-flash";
+/// DeepSeek models matching this prefix accept no image input.
+const TEXT_ONLY_PREFIX: &str = "deepseek-v4-pro";
 
 /// DeepSeek's own API. It speaks the OpenAI chat-completions format, so the
 /// wire logic is shared with `openai_compatible`; what differs is the
@@ -64,9 +66,6 @@ impl AiProvider for DeepSeek {
         !model.trim().to_ascii_lowercase().starts_with(TEXT_ONLY_PREFIX)
     }
 }
-
-/// DeepSeek models matching this prefix accept no image input.
-const TEXT_ONLY_PREFIX: &str = "deepseek-v4-pro";
 
 #[cfg(test)]
 mod tests {

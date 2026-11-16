@@ -657,14 +657,14 @@ mod tests {
 
     #[test]
     fn providers_without_web_search_ignore_options_and_stay_identical() {
-        // ollama & openai_compatible don't override the defaults: no web
-        // search, and build_request_with == build_request regardless of opts.
+        // Providers without web search must ignore the switch entirely:
+        // build_request_with == build_request when only web_search is set.
         let cfg = crate::config::ProviderSettings {
             base_url: "http://x/v1".into(),
             model: "m".into(),
             ..Default::default()
         };
-        for id in ["ollama", "openai_compatible"] {
+        for id in ["ollama", "openai_compatible", "deepseek"] {
             let p = provider(id).unwrap();
             assert!(!p.supports_web_search(), "{id} should not support web search");
             let plain = p.build_request(&cfg, Some("k"), "Hi").unwrap();
