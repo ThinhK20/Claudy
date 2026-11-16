@@ -1267,10 +1267,14 @@ mod tests {
     fn one_malformed_row_does_not_take_the_whole_queue_down() {
         // A single bad row used to fail `load`, and the scheduler then fired
         // nothing at all — silently, for every reminder in the file.
+        // Due times are relative to `now()` (which is in Local time) so the
+        // test holds on any machine timezone, including UTC CI runners.
+        let soon = (now() + Duration::hours(2)).to_rfc3339();
+        let tomorrow = (now() + Duration::days(1)).to_rfc3339();
         let value = serde_json::json!([
-            { "id": "a", "text": "call mum", "dueAt": "2026-07-24T16:32:00+07:00" },
+            { "id": "a", "text": "call mum", "dueAt": soon },
             { "id": "b", "text": ["not", "a", "string"] },
-            { "id": "c", "text": "ship it", "dueAt": "2026-07-25T09:00:00+07:00" },
+            { "id": "c", "text": "ship it", "dueAt": tomorrow },
         ]);
         let rows: Vec<Reminder> = crate::config::parse_rows(value).unwrap();
         let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
