@@ -66,6 +66,12 @@ const BUILTIN: &[(&str, f64, f64)] = &[
     ("gemini-2.5-flash", 0.30, 2.50),
     ("gemini-2.5-pro", 1.25, 10.00),
     ("gemini-2.0-flash", 0.10, 0.40),
+    // DeepSeek (checked 2026-11-16 against api-docs.deepseek.com). DeepSeek
+    // bills peak hours at double the off-peak rate and cached input at ~1/50.
+    // The table holds one rate, so it uses the PEAK cache-miss rate: the
+    // estimate may run high but never undercounts the real bill.
+    ("deepseek-flash", 0.30, 1.20),
+    ("deepseek-v4-pro", 1.32, 3.96),
 ];
 
 /// Longest-prefix match over `(id, value)` rows.

@@ -94,6 +94,7 @@ const PROVIDER_LABELS: Record<string, string> = {
   anthropic: "Anthropic",
   openai_compatible: "OpenAI-compatible",
   gemini: "Google Gemini",
+  deepseek: "DeepSeek",
   ollama: "Ollama",
 };
 

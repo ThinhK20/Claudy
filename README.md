@@ -53,7 +53,7 @@ Built with Tauri 2 and React. Windows-first — macOS and Linux code paths exist
 - Create prompts with their own global shortcuts. Templates can include `{{selected_text}}`, `{{clipboard}}`, `{{date}}`, and `{{time}}`
 - Works on text you select in any application: press the shortcut, and the finished result lands on your clipboard with a notification (pasting it for you is optional and off by default)
 - Manage prompts easily: search, turn on or off, run, delete, and share them as JSON files
-- Choose your AI service: **Anthropic**, **OpenAI-compatible** (OpenAI, Groq, and others), **Google Gemini**, or **Ollama** (runs on your machine)
+- Choose your AI service: **Anthropic**, **OpenAI-compatible** (OpenAI, Groq, and others), **Google Gemini**, **DeepSeek**, or **Ollama** (runs on your machine)
 - API keys are kept in your operating system's secure credential store — never written to a config file
 
 ### Quick-ask voice assistant

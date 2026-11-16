@@ -106,7 +106,7 @@ pub struct ResponseUsage {
     pub model: Option<String>,
 }
 
-/// The shape all four `parse_usage` impls share: parse the body, read two token
+/// The shape every `parse_usage` impl shares: parse the body, read two token
 /// pointers and a model pointer. `None` when the body isn't JSON or the
 /// provider reported neither token count — a renamed or dropped field costs the
 /// stats entry, never the completion.
@@ -187,6 +187,7 @@ pub trait AiProvider: Sync {
 }
 
 pub mod anthropic;
+pub mod deepseek;
 pub mod fallback;
 pub mod gemini;
 pub mod ollama;
@@ -198,6 +199,7 @@ pub fn provider(id: &str) -> Result<&'static dyn AiProvider, String> {
         "ollama" => Ok(&ollama::Ollama),
         "anthropic" => Ok(&anthropic::Anthropic),
         "gemini" => Ok(&gemini::Gemini),
+        "deepseek" => Ok(&deepseek::DeepSeek),
         _ => Err(format!("Unknown AI provider \"{id}\"")),
     }
 }

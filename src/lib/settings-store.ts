@@ -4,7 +4,7 @@ import { errorMessage } from "@/lib/error-message";
 import type { ModelPrice } from "@/lib/usage-api";
 import type { VocabRule } from "@/lib/vocabulary-api";
 
-export type ProviderId = "openai_compatible" | "ollama" | "anthropic" | "gemini";
+export type ProviderId = "openai_compatible" | "ollama" | "anthropic" | "gemini" | "deepseek";
 
 export interface ProviderSettings {
   baseUrl: string;
@@ -21,6 +21,7 @@ export interface AiSettings {
   ollama: ProviderSettings;
   anthropic: ProviderSettings;
   gemini: ProviderSettings;
+  deepseek: ProviderSettings;
 }
 
 /** How forgiving the wake-phrase match is against what whisper actually heard. */

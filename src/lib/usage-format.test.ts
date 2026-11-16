@@ -119,6 +119,7 @@ describe("labels", () => {
   test("provider ids get their branded names, unknown ids pass through", () => {
     expect(providerLabel("openai_compatible")).toBe("OpenAI-compatible");
     expect(providerLabel("anthropic")).toBe("Anthropic");
+    expect(providerLabel("deepseek")).toBe("DeepSeek");
     expect(providerLabel("my-gateway")).toBe("my-gateway");
   });
 });

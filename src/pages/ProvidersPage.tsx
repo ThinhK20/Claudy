@@ -88,6 +88,15 @@ const PROVIDERS: ProviderMeta[] = [
     defaultFallbacks: ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash"],
     keyHint: "Required",
   },
+  {
+    id: "deepseek",
+    settingsKey: "deepseek",
+    label: "DeepSeek",
+    defaultBaseUrl: "https://api.deepseek.com",
+    defaultModel: "deepseek-flash",
+    defaultFallbacks: [],
+    keyHint: "Required",
+  },
 ];
 
 interface TestState {

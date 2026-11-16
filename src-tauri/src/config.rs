@@ -6,7 +6,8 @@ pub const STORE_FILE: &str = "settings.json";
 
 /// Single source of truth for provider ids — `secrets` and `ai` validate
 /// against this list.
-pub const PROVIDER_IDS: [&str; 4] = ["openai_compatible", "ollama", "anthropic", "gemini"];
+pub const PROVIDER_IDS: [&str; 5] =
+    ["openai_compatible", "ollama", "anthropic", "gemini", "deepseek"];
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default, rename_all = "camelCase")]
@@ -30,6 +31,7 @@ pub struct AiSettings {
     pub ollama: ProviderSettings,
     pub anthropic: ProviderSettings,
     pub gemini: ProviderSettings,
+    pub deepseek: ProviderSettings,
 }
 
 impl Default for AiSettings {
@@ -44,6 +46,7 @@ impl Default for AiSettings {
             ollama: ProviderSettings::default(),
             anthropic: ProviderSettings::default(),
             gemini: ProviderSettings::default(),
+            deepseek: ProviderSettings::default(),
         }
     }
 }
@@ -55,6 +58,7 @@ impl AiSettings {
             "ollama" => Ok(&self.ollama),
             "anthropic" => Ok(&self.anthropic),
             "gemini" => Ok(&self.gemini),
+            "deepseek" => Ok(&self.deepseek),
             _ => Err(format!("Unknown AI provider \"{id}\"")),
         }
     }
