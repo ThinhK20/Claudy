@@ -70,8 +70,11 @@ jobs:
           node-version: 20
           cache: npm
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+      # Pinned: Rust 1.100 moved build-script OUT_DIRs to build/<pkg>/<hash>/out,
+      # which breaks ort-sys 2.0.0-rc.12's DLL copy (and DirectML.dll staging).
+      # kokoro-tts 0.3 can't use ort rc.14+, which handles the new layout.
+      - name: Install Rust 1.99.1
+        uses: dtolnay/rust-toolchain@1.99.1
         with:
           components: clippy
 
