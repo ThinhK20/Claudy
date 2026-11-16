@@ -25,19 +25,7 @@ impl AiProvider for OpenAiCompatible {
         api_key: Option<&str>,
         prompt: &str,
     ) -> Result<HttpRequest, String> {
-        let base = or_default(&cfg.base_url, DEFAULT_BASE_URL).trim_end_matches('/');
-        let mut headers: Vec<(&'static str, String)> = Vec::new();
-        if let Some(key) = api_key {
-            headers.push(("authorization", format!("Bearer {key}")));
-        }
-        Ok(HttpRequest {
-            url: format!("{base}/chat/completions"),
-            headers,
-            body: serde_json::json!({
-                "model": or_default(&cfg.model, DEFAULT_MODEL),
-                "messages": [{ "role": "user", "content": prompt }],
-            }),
-        })
+        Ok(chat_request(cfg, api_key, prompt, DEFAULT_BASE_URL, DEFAULT_MODEL))
     }
 
     fn default_model(&self) -> &'static str {
@@ -48,7 +36,7 @@ impl AiProvider for OpenAiCompatible {
     /// Local servers (LM Studio, llama.cpp) often omit the block entirely —
     /// that yields `None` and the run is logged without token counts.
     fn parse_usage(&self, body: &str) -> Option<super::ResponseUsage> {
-        super::usage_from(body, "/usage/prompt_tokens", "/usage/completion_tokens", "/model")
+        parse_chat_usage(body)
     }
 
     /// OpenAI chat models take images via `image_url` parts; the default
@@ -67,39 +55,86 @@ impl AiProvider for OpenAiCompatible {
         opts: super::RequestOptions,
     ) -> Result<HttpRequest, String> {
         let mut req = self.build_request(cfg, api_key, prompt)?;
-        // Order is load-bearing: images address the current message at index 0,
-        // history goes in front of it, and the system message must end up first
-        // of all.
-        if !opts.images.is_empty() {
-            // Rewrite the user message content as a parts array: text, then one
-            // `image_url` part per attachment using an inline data URL. Done
-            // first, while the user message is still at index 0.
-            let mut content = vec![serde_json::json!({ "type": "text", "text": prompt })];
-            for img in &opts.images {
-                content.push(serde_json::json!({
-                    "type": "image_url",
-                    "image_url": { "url": format!("data:{};base64,{}", img.media_type, img.data) },
-                }));
-            }
-            req.body["messages"][0]["content"] = serde_json::Value::Array(content);
-        }
-        super::prepend_history(&mut req.body, &opts.history);
-        if let Some(system) = super::non_empty_system(&opts) {
-            if let Some(messages) = req.body["messages"].as_array_mut() {
-                messages.insert(0, serde_json::json!({ "role": "system", "content": system }));
-            }
-        }
+        apply_chat_options(&mut req, prompt, &opts);
         Ok(req)
     }
 
     fn parse_response(&self, body: &str) -> Result<String, String> {
-        let v: serde_json::Value =
-            serde_json::from_str(body).map_err(|e| format!("Unexpected response: {e}"))?;
-        v.pointer("/choices/0/message/content")
-            .and_then(|c| c.as_str())
-            .map(|s| s.trim().to_string())
-            .ok_or_else(|| "Unexpected response shape (no choices[0].message.content)".into())
+        parse_chat_response(body)
     }
+}
+
+// ---------------------------------------------------------------------------
+// The OpenAI chat-completions wire format, shared by every Provider that
+// speaks it (this one and DeepSeek). Each Provider supplies only its own
+// defaults and any extra body fields.
+// ---------------------------------------------------------------------------
+
+/// A bare chat-completions request: `{base}/chat/completions`, an optional
+/// Bearer key, and a single user message. Blank `cfg` fields fall back to the
+/// given defaults.
+pub(crate) fn chat_request(
+    cfg: &ProviderSettings,
+    api_key: Option<&str>,
+    prompt: &str,
+    default_base_url: &str,
+    default_model: &str,
+) -> HttpRequest {
+    let base = or_default(&cfg.base_url, default_base_url).trim_end_matches('/');
+    let mut headers: Vec<(&'static str, String)> = Vec::new();
+    if let Some(key) = api_key {
+        headers.push(("authorization", format!("Bearer {key}")));
+    }
+    HttpRequest {
+        url: format!("{base}/chat/completions"),
+        headers,
+        body: serde_json::json!({
+            "model": or_default(&cfg.model, default_model),
+            "messages": [{ "role": "user", "content": prompt }],
+        }),
+    }
+}
+
+/// Apply images, history and the system message to a `chat_request` body.
+/// Leaves the body byte-identical when `opts` is empty.
+pub(crate) fn apply_chat_options(req: &mut HttpRequest, prompt: &str, opts: &super::RequestOptions) {
+    // Order is load-bearing: images address the current message at index 0,
+    // history goes in front of it, and the system message must end up first
+    // of all.
+    if !opts.images.is_empty() {
+        // Rewrite the user message content as a parts array: text, then one
+        // `image_url` part per attachment using an inline data URL. Done
+        // first, while the user message is still at index 0.
+        let mut content = vec![serde_json::json!({ "type": "text", "text": prompt })];
+        for img in &opts.images {
+            content.push(serde_json::json!({
+                "type": "image_url",
+                "image_url": { "url": format!("data:{};base64,{}", img.media_type, img.data) },
+            }));
+        }
+        req.body["messages"][0]["content"] = serde_json::Value::Array(content);
+    }
+    super::prepend_history(&mut req.body, &opts.history);
+    if let Some(system) = super::non_empty_system(opts) {
+        if let Some(messages) = req.body["messages"].as_array_mut() {
+            messages.insert(0, serde_json::json!({ "role": "system", "content": system }));
+        }
+    }
+}
+
+/// The trimmed text of `choices[0].message.content`.
+pub(crate) fn parse_chat_response(body: &str) -> Result<String, String> {
+    let v: serde_json::Value =
+        serde_json::from_str(body).map_err(|e| format!("Unexpected response: {e}"))?;
+    v.pointer("/choices/0/message/content")
+        .and_then(|c| c.as_str())
+        .map(|s| s.trim().to_string())
+        .ok_or_else(|| "Unexpected response shape (no choices[0].message.content)".into())
+}
+
+/// `usage.prompt_tokens` / `usage.completion_tokens` plus the reported model.
+pub(crate) fn parse_chat_usage(body: &str) -> Option<super::ResponseUsage> {
+    super::usage_from(body, "/usage/prompt_tokens", "/usage/completion_tokens", "/model")
 }
 
 #[cfg(test)]
